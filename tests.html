@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>模板回归测试</title>
+  <style>
+    :root { --ok: #107c41; --bad: #b42318; --bg: #fff; --text: #1c2420; --line: #e2e7e4; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #161a18; --text: #e6ebe8; --line: #2c3430; --ok: #4ccb84; --bad: #f2877d; } }
+    :root[data-theme="dark"] { --bg: #161a18; --text: #e6ebe8; --line: #2c3430; --ok: #4ccb84; --bad: #f2877d; }
+    body { margin: 0; padding: 20px 16px; background: var(--bg); color: var(--text); font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    #sum { margin: 0 0 14px; font-weight: 600; }
+    .wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { border-bottom: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+    code { font: 12px Consolas, monospace; word-break: break-all; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>模板引擎回归测试</h1>
+  <p id="sum">运行中…</p>
+  <div class="wrap"><table><thead><tr><th>表</th><th>需求</th><th>结果</th><th>公式 / 值</th></tr></thead><tbody id="rows"></tbody></table></div>
+
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/exceljs.min.js"></script>
+  <script src="vendor/hyperformula.full.min.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/functions.js"></script>
+  <script src="js/formula.js"></script>
+  <script src="js/hf-plugins.js"></script>
+  <script src="js/workbook.js"></script>
+  <script src="js/templates.js"></script>
+  <script src="js/samples.js"></script>
+  <script>
+  (async function () {
+    // [工作表, 需求, 期望类型, 期望公式（正则，匹配第一条公式）]
+    const S = '销售明细', E = '员工信息', G = '成绩表';
+    const CASES = [
+      [S, '按区域汇总销售额的合计', 'group', /^=SUMIF\(.*\$E\$2:\$E\$61,\$A2,.*\$I\$2:\$I\$61\)$/],
+      [S, '销售额的总和', 'scalar', /^=SUM\(.*\$I\$2:\$I\$61\)$/],
+      [S, '华东区域的销售额合计', 'scalar', /^=SUMIF\(.*"华东"/],
+      [S, '华东区域笔记本电脑的销售额', 'scalar', /^=SUMIFS\(.*"华东".*"笔记本电脑"/],
+      [S, '销售额大于5000的有多少', 'scalar', /^=COUNTIF\(.*">5000"\)$/],
+      [S, '单价乘以数量', 'column', /^=G2\*H2$/],
+      [S, '按销售额从高到低排名', 'column', /^=RANK\(I2,\$I\$2:\$I\$61,0\)$/],
+      [S, '按月统计销售额合计', 'group', /EDATE\(\$A2,1\)/],
+      [S, '每个销售员的销售额合计和订单数', 'group', /^=SUMIF\(/],
+      [S, '各产品的平均单价', 'group', /^=AVERAGEIF\(/],
+      [S, '华东或华南的销售额合计', 'scalar', /"华东".*\+SUMIF\(.*"华南"/],
+      [S, '2024年3月的销售额合计', 'scalar', /DATE\(2024,3,1\).*DATE\(2024,4,1\)/],
+      [S, '3月份的销售额合计', 'scalar', /^=SUMPRODUCT\(\(MONTH\(/],
+      [S, '销售额在1000到5000之间的有多少', 'scalar', /^=COUNTIFS\(.*">=1000".*"<=5000"/],
+      [S, '销售额最高的是谁', 'scalar', /^=INDEX\(.*MATCH\(MAX\(/],
+      [S, '销售额大于等于10000标记为大单，否则为普通', 'column', /^=IF\(I2>=10000,"大单","普通"\)$/],
+      [S, '根据工号从员工信息查找部门', 'column', /^=IFERROR\(VLOOKUP\(C2,'员工信息'!\$A\$2:\$D\$25,4,FALSE\),"未找到"\)$/],
+      [S, '各区域销售额占比', 'group', /^=SUMIF\(/],
+      [S, '逐行累计销售额', 'column', /^=SUM\(\$I\$2:I2\)$/],
+      [S, '提取日期中的月份', 'column', /^=MONTH\(A2\)$/],
+      [S, '订单号的后4位', 'column', /^=RIGHT\(B2,4\)$/],
+      [S, '不重复的产品有多少种', 'scalar', /^=SUMPRODUCT\(\(.*<>""\)\/COUNTIF\(/],
+      [S, '区域不是华东的销售额合计', 'scalar', /"<>华东"/],
+      [S, '每个区域的最高销售额', 'group', /^=AGGREGATE\(14,6,/],
+      [S, '销售额第2大的值', 'scalar', /^=LARGE\(.*,2\)$/],
+      [E, '根据身份证号计算年龄', 'column', /^=DATEDIF\(DATE\(MID\(E2,7,4\)/],
+      [E, '根据入职日期计算工龄', 'column', /^=DATEDIF\(F2,TODAY\(\),"Y"\)$/],
+      [E, '统计每个部门的人数', 'group', /^=COUNTIF\(.*\$D\$2:\$D\$25,\$A2\)$/],
+      [E, '销售部女员工的平均工资', 'scalar', /^=AVERAGEIFS\(.*"销售部".*"女"/],
+      [E, '基本工资大于8000的标记为高薪', 'column', /^=IF\(G2>8000,"高薪",""\)$/],
+      [E, '判断基本工资是否超过10000', 'column', /^=IF\(G2>10000,"是","否"\)$/],
+      [E, '手机号中间四位隐藏', 'column', /^=REPLACE\(H2,4,4,"\*\*\*\*"\)$/],
+      [E, '把姓名和部门用"-"连接起来', 'column', /^=B2&"-"&D2$/],
+      [E, '在部门内按基本工资排名', 'column', /^=COUNTIFS\(\$D\$2:\$D\$25,D2,\$G\$2:\$G\$25,">"&G2\)\+1$/],
+      [E, '每个人所在部门的平均基本工资', 'column', /^=AVERAGEIF\(\$D\$2:\$D\$25,D2,\$G\$2:\$G\$25\)$/],
+      [E, '基本工资占所在部门合计的比例', 'column', /^=G2\/SUMIF\(/],
+      [E, '2020年以后入职的有多少人', 'scalar', /DATE\(2021,1,1\)/],
+      [E, '按部门和性别统计人数', 'group', /^=COUNTIFS\(.*\$A2.*\$B2\)$/],
+      [G, '计算每个学生的总分', 'column', /^=SUM\(D2,E2,F2\)$/],
+      [G, '数学90分以上优秀，80-89良好，60-79及格，60以下不及格', 'column', /^=IF\(E2>=90,"优秀",IF\(E2>=80,"良好",IF\(E2>=60,"及格","不及格"\)\)\)$/],
+      [G, '如果语文>=60，显示及格，否则显示不及格', 'column', /^=IF\(D2>=60,"及格","不及格"\)$/],
+      [G, '各班数学平均分', 'group', /^=AVERAGEIF\(/],
+      [G, '数学最高分是谁', 'scalar', /^=INDEX\(/],
+      [G, '英语不及格的人数', 'scalar', /"<60"/],
+      [G, '每个班级语文及格的人数', 'group', /^=COUNTIFS\(.*">=60"\)$/],
+      [G, '利润=语文-数学', 'column', /^=D2-E2$/],
+    ];
+    const buf = EFA.Samples.buildSampleWorkbook();
+    const wb = EFA.Workbook.fromBuffer(buf, '示例数据.xlsx', 'xlsx');
+    const tbody = document.getElementById('rows');
+    let pass = 0;
+    for (const [sn, req, kind, re] of CASES) {
+      const sheet = wb.sheets.find(s => s.name === sn);
+      let ok = false, detail = '';
+      try {
+        const plan = EFA.Templates.match(req, wb, sheet).plan;
+        if (!plan) detail = '没有匹配到模板';
+        else {
+          const op = EFA.Workbook.applyPending(wb, plan);
+          const f = op.outputs[0].sampleFormula;
+          const v = op.outputs[0].values.slice(0, 3).map(x => EFA.Workbook.formatValue(x, op.outputs[0].format)).join(' | ');
+          ok = op.kind === kind && re.test(f) && !op.outputs.some(o => o.errors.counts['#ERROR!'] || o.errors.counts['#NAME?']);
+          detail = '<code>' + EFA.U.escapeHtml(f) + '</code><br>' + EFA.U.escapeHtml(v) + (op.kind !== kind ? '<br>类型：' + op.kind + '（期望 ' + kind + '）' : '');
+          EFA.Workbook.discardPending(wb);
+        }
+      } catch (e) { detail = '出错：' + EFA.U.escapeHtml(e.message); EFA.Workbook.discardPending(wb); }
+      if (ok) pass++;
+      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + sn + '</td><td>' + EFA.U.escapeHtml(req) + '</td><td class="' + (ok ? 'ok">通过' : 'bad">失败') + '</td><td>' + detail + '</td></tr>');
+    }
+    const sum = document.getElementById('sum');
+    sum.textContent = '通过 ' + pass + ' / ' + CASES.length;
+    sum.className = pass === CASES.length ? 'ok' : 'bad';
+    window.TEST_RESULT = { pass, total: CASES.length };
+  })();
+  </script>
+</body>
+</html>

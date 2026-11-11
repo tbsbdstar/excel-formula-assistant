@@ -1,0 +1,7 @@
+# 打包产物：用 python build.py 重新生成
+dist/
+
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

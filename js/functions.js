@@ -1,0 +1,92 @@
+/* Excel 2016 函数白名单 + 常用函数中文说明
+ * 仅收录 Excel 2016（非订阅版）与 WPS 均可用的函数。
+ * 明确排除 2019 / Microsoft 365 才有的：IFS、SWITCH、MAXIFS、MINIFS、CONCAT、TEXTJOIN、
+ * XLOOKUP、XMATCH、FILTER、SORT、SORTBY、UNIQUE、SEQUENCE、RANDARRAY、LET、LAMBDA 等。
+ */
+(function (EFA) {
+  'use strict';
+
+  const EXCEL2016 = `
+ABS ACOS ACOSH ACOT ACOTH AGGREGATE ARABIC ASIN ASINH ATAN ATAN2 ATANH BASE CEILING CEILING.MATH CEILING.PRECISE
+COMBIN COMBINA COS COSH COT COTH CSC CSCH DECIMAL DEGREES EVEN EXP FACT FACTDOUBLE FLOOR FLOOR.MATH FLOOR.PRECISE
+GCD INT ISO.CEILING LCM LN LOG LOG10 MDETERM MINVERSE MMULT MOD MROUND MULTINOMIAL MUNIT ODD PI POWER PRODUCT
+QUOTIENT RADIANS RAND RANDBETWEEN ROMAN ROUND ROUNDDOWN ROUNDUP SEC SECH SERIESSUM SIGN SIN SINH SQRT SQRTPI
+SUBTOTAL SUM SUMIF SUMIFS SUMPRODUCT SUMSQ SUMX2MY2 SUMX2PY2 SUMXMY2 TAN TANH TRUNC
+AVEDEV AVERAGE AVERAGEA AVERAGEIF AVERAGEIFS BETA.DIST BINOM.DIST CHISQ.DIST CONFIDENCE.NORM CORREL COUNT COUNTA
+COUNTBLANK COUNTIF COUNTIFS COVARIANCE.P COVARIANCE.S DEVSQ EXPON.DIST F.DIST FISHER FORECAST FORECAST.LINEAR
+FREQUENCY GAMMA GEOMEAN GROWTH HARMEAN INTERCEPT KURT LARGE LINEST MAX MAXA MEDIAN MIN MINA MODE MODE.SNGL MODE.MULT
+NORM.DIST NORM.INV NORM.S.DIST PEARSON PERCENTILE PERCENTILE.INC PERCENTILE.EXC PERCENTRANK PERCENTRANK.INC
+QUARTILE QUARTILE.INC QUARTILE.EXC RANK RANK.EQ RANK.AVG RSQ SKEW SLOPE SMALL STANDARDIZE STDEV STDEV.P STDEV.S
+STDEVA STDEVP STEYX TREND TRIMMEAN VAR VAR.P VAR.S VARA VARP
+AND FALSE IF IFERROR IFNA NOT OR TRUE XOR
+ADDRESS AREAS CHOOSE COLUMN COLUMNS HLOOKUP HYPERLINK INDEX INDIRECT LOOKUP MATCH OFFSET ROW ROWS TRANSPOSE VLOOKUP
+FORMULATEXT
+CHAR CLEAN CODE CONCATENATE DOLLAR EXACT FIND FINDB FIXED LEFT LEFTB LEN LENB LOWER MID MIDB NUMBERVALUE PROPER
+REPLACE REPLACEB REPT RIGHT RIGHTB SEARCH SEARCHB SUBSTITUTE T TEXT TRIM UNICHAR UNICODE UPPER VALUE
+DATE DATEDIF DATEVALUE DAY DAYS DAYS360 EDATE EOMONTH HOUR ISOWEEKNUM MINUTE MONTH NETWORKDAYS NETWORKDAYS.INTL NOW
+SECOND TIME TIMEVALUE TODAY WEEKDAY WEEKNUM WORKDAY WORKDAY.INTL YEAR YEARFRAC
+ERROR.TYPE ISBLANK ISERR ISERROR ISEVEN ISFORMULA ISLOGICAL ISNA ISNONTEXT ISNUMBER ISODD ISREF ISTEXT N NA TYPE
+FV IPMT IRR NPER NPV PMT PPMT PV RATE XIRR XNPV SLN DB DDB SYD EFFECT NOMINAL
+BIN2DEC DEC2BIN DEC2HEX HEX2DEC CONVERT
+`.trim().split(/\s+/);
+
+  const EXCEL2016_SET = new Set(EXCEL2016);
+
+  /** 新版才有、必须拒绝的函数，给出替代建议 */
+  const NEWER_ONLY = {
+    IFS: '嵌套 IF', SWITCH: '嵌套 IF 或 CHOOSE', MAXIFS: 'AGGREGATE(14,6,…) 或 SUMPRODUCT(MAX(…))',
+    MINIFS: 'AGGREGATE(15,6,…)', CONCAT: 'CONCATENATE 或 &', TEXTJOIN: 'CONCATENATE 或 &',
+    XLOOKUP: 'VLOOKUP 或 INDEX+MATCH', XMATCH: 'MATCH', FILTER: '辅助列 + 公式', SORT: '排序功能或 LARGE/SMALL',
+    SORTBY: '排序功能', UNIQUE: '删除重复项功能', SEQUENCE: 'ROW()', RANDARRAY: 'RAND', LET: '直接展开表达式',
+    LAMBDA: '直接写公式',
+  };
+
+  /** 本工具自己为预览引擎补充实现的函数（引擎原生不支持） */
+  const PLUGIN_FUNCS = ['RANK', 'RANK.EQ', 'AVERAGEIFS', 'AGGREGATE'];
+
+  const DESC = {
+    SUM: '求和', SUMIF: '按一个条件求和', SUMIFS: '按多个条件求和', SUMPRODUCT: '数组相乘再求和（常用于多条件统计）',
+    COUNT: '统计数字单元格个数', COUNTA: '统计非空单元格个数', COUNTBLANK: '统计空单元格个数',
+    COUNTIF: '按一个条件计数', COUNTIFS: '按多个条件计数',
+    AVERAGE: '平均值', AVERAGEIF: '按一个条件求平均', AVERAGEIFS: '按多个条件求平均',
+    MAX: '最大值', MIN: '最小值', MEDIAN: '中位数', LARGE: '第 k 大的值', SMALL: '第 k 小的值',
+    AGGREGATE: '可忽略错误值的统计（这里用来做带条件的最大/最小值）',
+    RANK: '排名（数值在一组数中的名次）', 'RANK.EQ': '排名',
+    ROUND: '四舍五入', ROUNDUP: '向上舍入', ROUNDDOWN: '向下舍入（截断）', INT: '向下取整', MOD: '求余数', ABS: '绝对值',
+    IF: '条件判断：满足返回A，否则返回B', AND: '所有条件都满足', OR: '任一条件满足', NOT: '取反',
+    IFERROR: '出错时返回指定值', IFNA: '找不到(#N/A)时返回指定值',
+    VLOOKUP: '在表格首列查找，返回同行指定列的值', HLOOKUP: '在首行查找',
+    INDEX: '按行号取区域中的值', MATCH: '查找某值在区域中的位置',
+    LEFT: '从左边截取字符', RIGHT: '从右边截取字符', MID: '从中间指定位置截取字符', LEN: '字符个数',
+    FIND: '查找字符位置（区分大小写）', SEARCH: '查找字符位置（不区分大小写，可用通配符）',
+    SUBSTITUTE: '替换指定文本', REPLACE: '按位置替换字符', TRIM: '去除多余空格',
+    UPPER: '转大写', LOWER: '转小写', PROPER: '首字母大写', TEXT: '把数值按格式转成文本', VALUE: '文本转数字',
+    CONCATENATE: '连接多个文本', REPT: '重复文本',
+    DATE: '用年、月、日组成日期', DATEDIF: '计算两个日期之间的年/月/天数', TODAY: '今天的日期', NOW: '当前日期时间',
+    YEAR: '取年份', MONTH: '取月份', DAY: '取日', WEEKDAY: '星期几（数字）', EDATE: '加减若干个月后的日期',
+    EOMONTH: '某月最后一天', NETWORKDAYS: '两日期之间的工作日天数', WORKDAY: '若干工作日后的日期',
+    ISNUMBER: '是否为数字', ISBLANK: '是否为空', ISERROR: '是否为错误值', ISTEXT: '是否为文本',
+    CHOOSE: '按序号从列表中取值', ROW: '行号', COLUMN: '列号', OFFSET: '偏移引用', INDIRECT: '按文本地址引用',
+    TRUE: '逻辑值“真”', FALSE: '逻辑值“假”（VLOOKUP 中表示精确匹配）',
+  };
+
+  let allowedCache = null;
+  /** 允许使用的函数 = Excel2016 白名单 ∩（预览引擎支持 ∪ 自补函数） */
+  function allowedSet() {
+    if (allowedCache) return allowedCache;
+    const hfNames = new Set(window.HyperFormula ? HyperFormula.getRegisteredFunctionNames('enGB') : []);
+    PLUGIN_FUNCS.forEach(n => hfNames.add(n));
+    allowedCache = new Set(EXCEL2016.filter(n => hfNames.has(n) || n === 'TRUE' || n === 'FALSE'));
+    return allowedCache;
+  }
+
+  EFA.Functions = {
+    EXCEL2016,
+    isExcel2016: n => EXCEL2016_SET.has(String(n).toUpperCase()),
+    newerOnly: n => NEWER_ONLY[String(n).toUpperCase()] || null,
+    describe: n => DESC[String(n).toUpperCase()] || '',
+    allowedSet,
+    invalidateCache: () => { allowedCache = null; },
+    PLUGIN_FUNCS,
+  };
+})(window.EFA = window.EFA || {});
