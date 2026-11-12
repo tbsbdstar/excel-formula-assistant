@@ -63,6 +63,122 @@
  },
  {
   "schema": "excel-workflow/1",
+  "name": "示例：多门店合并并分组汇总",
+  "description": "把所有“周销售”表（各门店，列顺序可以不同）合并成一张明细，标出来源门店文件，再按门店、按商品生成两张汇总表。",
+  "files": [
+   {
+    "id": "main",
+    "role": "main",
+    "label": "周销售（第一个文件）",
+    "match": "*周销售*.xlsx"
+   },
+   {
+    "id": "stores",
+    "role": "ref",
+    "label": "周销售（其余文件）",
+    "match": "*周销售*.xlsx",
+    "multiple": true
+   }
+  ],
+  "output": {
+   "file_name": "门店周销售合并_{date}.xlsx"
+  },
+  "options": {
+   "recalc": "auto"
+  },
+  "steps": [
+   {
+    "op": "append_rows",
+    "title": "合并其余门店",
+    "from": {
+     "file": "stores"
+    },
+    "source_column": "来源文件"
+   },
+   {
+    "op": "sort_rows",
+    "title": "按门店、日期排序",
+    "by": [
+     {
+      "column": "门店"
+     },
+     {
+      "column": "日期"
+     }
+    ]
+   },
+   {
+    "op": "group_summary",
+    "title": "按门店汇总",
+    "group_by": [
+     "门店"
+    ],
+    "sheet_name": "按门店汇总",
+    "metrics": [
+     {
+      "column": "金额",
+      "func": "sum",
+      "title": "销售额"
+     },
+     {
+      "column": "数量",
+      "func": "sum",
+      "title": "销量"
+     },
+     {
+      "func": "count",
+      "title": "笔数"
+     }
+    ]
+   },
+   {
+    "op": "group_summary",
+    "title": "商品排行",
+    "group_by": [
+     "商品名称"
+    ],
+    "sheet_name": "商品排行",
+    "sort": "metric_desc",
+    "metrics": [
+     {
+      "column": "金额",
+      "func": "sum",
+      "title": "销售额"
+     },
+     {
+      "column": "单价",
+      "func": "max",
+      "title": "最高单价"
+     }
+    ]
+   },
+   {
+    "op": "validate",
+    "title": "检查",
+    "checks": [
+     {
+      "type": "not_empty",
+      "columns": [
+       "门店",
+       "商品编码"
+      ]
+     },
+     {
+      "type": "condition",
+      "where": {
+       "col": "数量",
+       "op": "<=",
+       "value": 0
+      },
+      "expect": "none",
+      "message": "不应有数量≤0 的行"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "schema": "excel-workflow/1",
   "name": "示例：按多列匹配回填并标色",
   "description": "用“订单号+商品编码”两列组合匹配上期表；未分配数≥10 的行回填上期的下单/入库时间并标色，未分配数=数量的写“逾期”。",
   "files": [

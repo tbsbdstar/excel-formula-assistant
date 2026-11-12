@@ -13,7 +13,7 @@ from openpyxl.formatting.formatting import ConditionalFormattingList
 from openpyxl.worksheet.cell_range import CellRange, MultiCellRange
 from openpyxl.worksheet.dimensions import ColumnDimension
 
-from . import refs
+from . import miniexpr, refs
 from .errors import StepError
 
 
@@ -48,6 +48,7 @@ class FileHandle:
         self.views: Dict[str, "SheetView"] = {}
         self.dropped_features: List[str] = []
         self.no_cached_values = False
+        self.eval_stack = set()   # 实时计算公式时防止循环引用
 
     # ------------------------------------------------------------ 加载
     def open(self):
@@ -289,11 +290,23 @@ class SheetView:
         return self.ws._cells.get((r, c))
 
     def get(self, r: int, c: int, warn=None):
-        """单元格当前值；公式单元格取文件里保存的计算结果"""
+        """单元格当前值。公式单元格：同表四则运算这类简单公式按当前数据实时计算（新写入的公式也能用）；
+        其他公式取文件里保存的计算结果；本次新写入的复杂公式没有结果，按空值处理"""
         cell = self.ws._cells.get((r, c))
         if cell is None or isinstance(cell, MergedCell):
             return None
         if self.fh.writable and cell.data_type == "f":
+            if isinstance(cell.value, str):
+                stack = self.fh.eval_stack
+                key3 = (self.name, r, c)
+                if key3 not in stack and len(stack) < 40:
+                    stack.add(key3)
+                    try:
+                        ok, v = miniexpr.evaluate(cell.value, lambda cc, rr: self.get(rr, cc, warn))
+                    finally:
+                        stack.discard(key3)
+                    if ok:
+                        return v
             key = id(cell)
             if key in self.fh.cached:
                 return self.fh.cached[key]
@@ -470,6 +483,34 @@ def restructure(fh: FileHandle, sheet_name: str, cmap: Optional[refs.IndexMap], 
         for name, dn in list(wb.defined_names.items()):
             if dn.attr_text:
                 dn.attr_text = refs.shift_formula("=" + dn.attr_text, "", sheet_name, cmap, rmap)[1:]
+    except AttributeError:
+        pass
+    fh.invalidate(sheet_name)
+
+
+def grow_rows(fh: FileHandle, sheet_name: str, first: int, last: int, count: int):
+    """数据末尾追加了 count 行后：把以第 last 行结尾的区域（公式、条件格式、数据验证、筛选、名称）向下延伸；
+    合并单元格、行高等不动。数据行（first～last）自己的公式是逐行计算的，不延伸"""
+    if count <= 0:
+        return
+    gm = refs.GrowMap(last, count)
+    ws = fh.wb[sheet_name]
+    _remap_formatting(ws, sheet_name, None, gm)
+    for other in fh.wb.worksheets:
+        for (r, c), cell in other._cells.items():
+            if cell.data_type == "f" and isinstance(cell.value, str):
+                v = cell.value
+                if other.title == sheet_name and first <= r <= last + count:
+                    continue
+                if other.title != sheet_name and "!" not in v:
+                    continue
+                nv = refs.shift_formula(v, other.title, sheet_name, None, gm)
+                if nv != v:
+                    cell.value = nv
+    try:
+        for name, dn in list(fh.wb.defined_names.items()):
+            if dn.attr_text:
+                dn.attr_text = refs.shift_formula("=" + dn.attr_text, "", sheet_name, None, gm)[1:]
     except AttributeError:
         pass
     fh.invalidate(sheet_name)

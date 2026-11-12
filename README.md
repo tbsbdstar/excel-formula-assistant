@@ -1,9 +1,11 @@
 # Excel 智能函数助手（MVP）
 
+> **使用者请看 [操作手册.md](操作手册.md)**：两个工具的用途、准备工作、按步骤操作、常见场景配置、常见问题。打包时会同时生成 `dist/操作手册.html`，工具包里也带一份。
+
 按《Excel 智能函数助手.md》PRD V1.0 实现的纯前端工具。用户拖入表格、用一句中文描述需求，就能得到 Excel 2016 / WPS 兼容的公式和计算结果，并可下载 .xlsx 文件（可选择保存“结果值”或“公式”）。
 
 > **V2.0 工作流（多文件、多步骤的重复处理）**由两部分组成：
-> - **工作流配置器** [workflow.html](workflow.html)：载入样例文件、编排步骤（21 种操作）、逐步推算表头并校验参数，保存为 JSON 配置，或直接生成放好配置的完整工具包 zip。纯前端，只依赖 SheetJS。
+> - **工作流配置器** [workflow.html](workflow.html)：载入样例文件、编排步骤（23 种操作，含多文件合并与分组汇总）、逐步推算表头并校验参数，保存为 JSON 配置，或直接生成放好配置的完整工具包 zip；接入 DeepSeek / 通义后可“用一句话生成步骤”（AI 只生成配置，经同样的规则校验、用户确认后才加入）。纯前端，依赖 SheetJS。
 > - **本地执行器** [executor/](executor/)：按 JSON 配置在本机批量处理 Excel（删插列、条件着色、多键匹配回填、比对、区块复制、校验报告），绿色便携包无需安装 Python，包里自带单文件版配置器。
 >
 > 用户手册见 [executor/docs/使用手册.txt](executor/docs/使用手册.txt)，配置格式见 [executor/docs/配置格式说明.md](executor/docs/配置格式说明.md)。打包：`python executor/build_toolkit.py`（生成 `executor/dist/Excel工作流工具/` 和 zip）；测试：`python -m unittest discover -s executor/tests`（含配置器操作目录与执行器参数的一致性检查）。源码目录里的 `executor/run.bat` 没有自带 Python，双击时会自动转去启动 dist 里打包好的工具。
@@ -91,7 +93,7 @@ css/app.css       样式（自动适配深色模式、手机宽度）
 js/limits.js      处理上限与 AI 用量上限（集中配置）
 js/util.js        通用工具
 js/functions.js   Excel 2016 函数白名单与中文说明
-js/formula.js     公式扫描、列引用语法展开、校验、高亮
+js/formula.js     公式扫描、列引用语法展开（带条件最大/最小值的 AGGREGATE 自动套 INDEX(…,0)，否则写进文件后 Excel 打开是 #VALUE!）、校验、高亮
 js/hf-plugins.js  为计算引擎补充的函数
 js/workbook.js    读文件、识别表头/列类型、计算引擎、应用与撤销计算
 js/templates.js   中文需求 → 计算计划（模板引擎）
@@ -107,6 +109,8 @@ js/wf-files.js    读取样例文件结构（表头、列类型、文件名规�
 js/wf-model.js    配置模型：逐步推算表头、参数校验、步骤摘要、导入导出
 js/wf-fields.js   参数编辑控件（列选择、条件构建器、颜色等）
 js/wf-zip.js      把配置放进工具包 zip
+js/wf-ai.js       用一句话生成步骤（提示词由操作目录自动生成）
+js/ai-settings.js 配置器的 AI 设置弹窗（与公式助手共用设置）
 js/wf-app.js      配置器页面交互
 executor/         本地执行器（Python）与绿色工具包打包脚本
 vendor/           SheetJS 0.20.3、ExcelJS 4.4.0、HyperFormula 3.5.0（本地副本，离线可用）

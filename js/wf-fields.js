@@ -303,7 +303,29 @@
     const id = ctx.sheetList(fd.source === 'ref' ? ctx.step.ref : null);
     return textInput(ctx.step[fd.key], v => ctx.set(fd.key, v.trim() === '' ? undefined : v.trim()), { placeholder: fd.placeholder, list: id });
   };
-  R.condition = (fd, ctx) => condEditor(ctx, ctx.step[fd.key], v => ctx.set(fd.key, v), { allowRef: fd.allowRef, source: fd.source === 'ref' ? 'refFile' : 'main' });
+  R.condition = (fd, ctx) => condEditor(ctx, ctx.step[fd.key], v => ctx.set(fd.key, v), { allowRef: fd.allowRef, source: fd.source === 'ref' ? 'refFile' : (fd.source || 'main') });
+
+  R.metrics = (fd, ctx) => {
+    const s = ctx.step;
+    if (!Array.isArray(s.metrics)) s.metrics = [{ func: 'sum', column: '' }];
+    const funcs = Object.keys(M.METRIC_FUNCS).map(k => ({ value: k, label: M.METRIC_FUNCS[k] }));
+    const box = h('div', { class: 'stack' });
+    const draw = () => {
+      box.textContent = '';
+      box.append(h('div', { class: 'row head-row' }, h('span', null, '汇总方式'), h('span', null, '对哪一列'), h('span', null, '结果列名（不填=自动）')));
+      s.metrics.forEach((m, i) => {
+        const r = row(
+          select(funcs, m.func, v => { m.func = v; if (v === 'count') delete m.column; else if (m.column === undefined) m.column = ''; ctx.changed(); draw(); }),
+          m.func === 'count' ? h('span', { class: 'hint', style: 'flex:1 1 140px' }, '（统计行数，不需要选列）') : colInput(ctx, m.column || undefined, v => { m.column = v || ''; ctx.changed(); }),
+          textInput(m.title, v => { if (v.trim()) m.title = v.trim(); else delete m.title; ctx.changed(); }, { placeholder: (m.column || '') + (M.METRIC_FUNCS[m.func] || '') }),
+          s.metrics.length > 1 ? h('button', { type: 'button', class: 'icon-btn', 'aria-label': '删除这个指标', onclick: () => { s.metrics.splice(i, 1); ctx.changed(); draw(); } }, '×') : null);
+        box.append(r);
+      });
+      box.append(h('button', { type: 'button', class: 'btn-text btn-xs', onclick: () => { s.metrics.push({ func: 'sum', column: '' }); ctx.changed(); draw(); } }, '＋ 再加一个指标'));
+    };
+    draw();
+    return box;
+  };
   R.rowRange = (fd, ctx) => textInput(ctx.step[fd.key], v => ctx.set(fd.key, v.trim() === '' ? undefined : v.trim()), { placeholder: fd.placeholder, mono: true });
 
   R.matchId = (fd, ctx) => textInput(ctx.step[fd.key], v => ctx.set(fd.key, v.trim() === '' ? undefined : v.trim()), { placeholder: '如 m1' });
@@ -555,7 +577,12 @@
   R.sheetSource = (fd, ctx) => {
     const s = ctx.step;
     const v = s.from = (s.from && typeof s.from === 'object') ? s.from : {};
-    if (v.file === undefined) { const r = M.state.cfg.files.find(f => f.role !== 'main'); if (r) v.file = r.id; }
+    if (v.file === undefined) {
+      const files = M.state.cfg.files.filter(f => f.role !== 'main');
+      // 追加行优先选“多个文件”，复制工作表不能用“多个文件”
+      const r = s.op === 'append_rows' ? (files.find(f => f.multiple) || files[0]) : files.find(f => !f.multiple);
+      if (r) v.file = r.id;
+    }
     return h('div', { class: 'row wrap' },
       fileSelect(v.file, x => { v.file = x; ctx.changed(); ctx.rerender(); }, { refOnly: true }),
       textInput(v.sheet, x => { if (x.trim()) v.sheet = x.trim(); else delete v.sheet; ctx.changed(); }, { placeholder: '工作表（不填=第一个）', list: ctx.sheetList(v.file || null) }));

@@ -56,6 +56,11 @@ def install_libs(target: Path):
         shutil.rmtree(p, ignore_errors=True)
 
 
+def openpyxl_col(i0: int) -> str:
+    from openpyxl.utils import get_column_letter
+    return get_column_letter(i0 + 1)
+
+
 def make_samples(folder: Path):
     """生成虚构的示例数据，供体验 templates 里的示例工作流"""
     from openpyxl import Workbook
@@ -102,6 +107,26 @@ def make_samples(folder: Path):
         ws.cell(row=ws.max_row, column=6).number_format = "yyyy-mm-dd"
     ws.append(["SO9999", "SKU999", 100, "已签收", dt.datetime(2026, 9, 1), None])
     wb.save(folder / "上期订单.xlsx")
+
+    # 三个门店的周销售表：格式相同、列顺序略有不同，用来演示多文件合并与分组汇总
+    goods = [("G01", "矿泉水", 2.5), ("G02", "牛奶", 6.8), ("G03", "面包", 9.9), ("G04", "咖啡", 18), ("G05", "薯片", 7.5)]
+    for k, store in enumerate(["门店A", "门店B", "门店C"]):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "销售"
+        cols = ["日期", "门店", "商品编码", "商品名称", "数量", "单价", "金额"]
+        if k == 2:
+            cols = ["日期", "商品编码", "商品名称", "门店", "单价", "数量", "金额"]   # 门店C 的列顺序不同
+        header(ws, cols)
+        for i in range(12 + k * 4):
+            r = i + 2
+            code, name, price = goods[rnd.randrange(len(goods))]
+            rec = {"日期": dt.datetime(2026, 11, 2) + dt.timedelta(days=i % 7), "门店": store, "商品编码": code, "商品名称": name,
+                   "数量": rnd.randint(1, 30), "单价": price}
+            q, p = (openpyxl_col(cols.index("数量")), openpyxl_col(cols.index("单价")))
+            ws.append([rec[c] if c != "金额" else f"={q}{r}*{p}{r}" for c in cols])
+            ws.cell(row=r, column=cols.index("日期") + 1).number_format = "yyyy-mm-dd"
+        wb.save(folder / f"{store}周销售.xlsx")
     # 有 Excel/WPS 时重算一次，让示例文件带上公式计算结果
     try:
         from engine.scan import recalc
@@ -149,6 +174,7 @@ def main():
     page = webbuild.build_page("workflow.html", "Excel工作流配置器.html")
     html = page.read_text(encoding="utf-8").replace('href="Excel智能函数助手.html"', 'href="#" hidden')
     (OUT / "工作流配置器.html").write_text(html, encoding="utf-8")
+    webbuild.build_manual(OUT / "操作手册.html")
     (OUT / "configs" / "把工作流配置文件放在这里.txt").write_text(
         "用本工具包里的「工作流配置器.html」（双击用浏览器打开）配置工作流，保存出的 .json 配置文件放在这个文件夹。\r\n"
         "想先体验：这里没有配置时直接双击 run.bat，窗口里会列出内置示例，输入序号即可用示例数据运行。\r\n",

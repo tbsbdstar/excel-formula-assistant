@@ -120,6 +120,49 @@ def pick_config():
     return choose(cfgs, "\n请选择要运行的工作流：", label)
 
 
+def split_paths(s):
+    """拖进 cmd 窗口的多个文件：路径之间用空格分隔，带空格的路径会加引号"""
+    out, cur, quoted = [], "", False
+    for ch in s:
+        if ch == '"':
+            quoted = not quoted
+        elif ch == " " and not quoted:
+            if cur:
+                out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur:
+        out.append(cur)
+    return [clean_path(x) for x in out if clean_path(x)]
+
+
+def find_multi(spec, pool, inputs, used):
+    """“多个文件”：符合规则的全部文件；一个都没有时提示拖入（可一次拖多个）"""
+    label = spec.get("label") or spec["id"]
+    pattern = spec.get("match")
+    cands = []
+    for src in (pool, inputs):
+        for p in src:
+            if str(p) in used or (pattern and not fnmatch.fnmatch(p.name.lower(), pattern.lower())):
+                continue
+            if str(p) not in {str(x) for x in cands}:
+                cands.append(p)
+    while not cands:
+        hint = f"（文件名应符合：{pattern}）" if pattern else ""
+        s = ask(f"\n没有找到「{label}」的文件。请把这些文件拖进本窗口（可以一次选中多个一起拖），然后按回车{hint}：\n> ")
+        got = [Path(x) for x in split_paths(s)]
+        bad = [p for p in got if not p.is_file() or p.suffix.lower() not in EXCEL_EXT]
+        if bad:
+            print("  这些不是可用的 .xlsx 文件：" + "、".join(p.name for p in bad))
+        cands = [p for p in got if p not in bad]
+    cands.sort(key=lambda p: p.name)
+    print(f"  「{label}」→ {len(cands)} 个文件：" + "、".join(p.name for p in cands[:10]) + (" …" if len(cands) > 10 else ""))
+    for p in cands:
+        used.add(str(p))
+    return [str(p) for p in cands]
+
+
 def find_files(cfg, dropped, input_dir=INPUT_DIR):
     """为每个文件角色找到实际文件：拖入的文件 > input 目录按规则匹配 > 提示拖入"""
     result = {}
@@ -127,7 +170,12 @@ def find_files(cfg, dropped, input_dir=INPUT_DIR):
     inputs = sorted((p for p in input_dir.glob("*") if p.suffix.lower() in EXCEL_EXT and not p.name.startswith("~$")),
                     key=lambda p: p.stat().st_mtime, reverse=True) if input_dir.is_dir() else []
     used = set()
-    for spec in cfg["files"]:
+    # 先定主表和单个文件，最后再收集“多个文件”，避免主表也被算进去
+    order = sorted(cfg["files"], key=lambda f: (f.get("role") != "main", bool(f.get("multiple"))))
+    for spec in order:
+        if spec.get("multiple"):
+            result[spec["id"]] = find_multi(spec, pool, inputs, used)
+            continue
         label = spec.get("label") or spec["id"]
         pattern = spec.get("match")
         cands = []
@@ -143,9 +191,14 @@ def find_files(cfg, dropped, input_dir=INPUT_DIR):
         if not pattern and len(cands) > 1 and len(pool) == len(cfg["files"]):
             cands = [p for p in pool if str(p) not in used][:1]
         chosen = None
+        same_as_multi = pattern and any(f.get("multiple") and (f.get("match") or "").lower() == pattern.lower() for f in cfg["files"])
         if len(cands) == 1:
             chosen = cands[0]
             print(f"  「{label}」→ {chosen.name}")
+        elif len(cands) > 1 and same_as_multi:
+            # 合并场景：主表与“多个文件”用同一规则，取第一个作主表，其余都会被追加，不用选
+            chosen = sorted(cands, key=lambda p: p.name)[0]
+            print(f"  「{label}」→ {chosen.name}（与“多个文件”规则相同，取第一个作主表，其余追加进来）")
         elif len(cands) > 1:
             chosen = choose(cands, f"\n「{label}」有多个候选文件：", lambda p: p.name)
         while chosen is None:
@@ -236,7 +289,12 @@ def main(argv=None):
             return 1
     if a.config:
         cfg = cfgmod.load(a.config)
-        paths = dict(x.split("=", 1) for x in a.file)
+        paths = {}
+        for x in a.file:
+            k, v = x.split("=", 1)
+            paths.setdefault(k, []).append(v)
+        multi = {f["id"] for f in cfg["files"] if f.get("multiple")}
+        paths = {k: (v if k in multi else v[0]) for k, v in paths.items()}
         rep = run(cfg, paths, Path(a.out), recalc="off" if a.no_recalc else None,
                   progress=(lambda m: None) if a.yes else print)
         print(rep.render())

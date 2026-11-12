@@ -196,6 +196,29 @@ class IndexMap:
         return (self.insert_at is None and not self.deleted) or (self.insert_at is not None and self.count == 0)
 
 
+class GrowMap(IndexMap):
+    """在数据末尾追加行：单元格都不动，但“以最后一行数据结尾”的区域向下延伸，
+    使汇总公式、筛选、条件格式等自动包含新追加的行（像 Excel 表格自动扩展那样）"""
+
+    def __init__(self, last: int, count: int):
+        super().__init__()
+        self.last, self.grow = last, count
+
+    def map(self, x):
+        return x
+
+    def map_span(self, lo, hi):
+        if lo < hi == self.last:
+            return lo, hi + self.grow
+        return lo, hi
+
+    def map_boundary(self, b):
+        return b
+
+    def is_identity(self):
+        return self.grow == 0
+
+
 def shift_ref_text(text: str, cmap: Optional[IndexMap], rmap: Optional[IndexMap]) -> str:
     """按行/列映射调整一个引用；无法表示时返回 #REF!"""
     try:

@@ -112,7 +112,92 @@
         out += s.v;
       }
     }
+    return aggregateArrays(out, 'wrap');
+  }
+
+  /**
+   * AGGREGATE(14~19, 选项, 区域/(条件), k) 的第 3 参数是数组运算。
+   * 不是在 Excel 里手工输入、而是写进文件的公式，Excel 打开时按普通公式处理会得到 #VALUE!（实测 Excel 2016/365）。
+   * 套一层 INDEX(…,0) 让各版本都按数组计算，不需要 Ctrl+Shift+Enter。
+   * mode: 'wrap' 写给 Excel；'unwrap' 给预览引擎（它本身就按数组计算，不需要也不支持这层包裹）。
+   */
+  function aggregateArrays(f, mode) {
+    const s = String(f);
+    let out = '', i = 0;
+    while (i < s.length) {
+      const ch = s[i];
+      if (ch === '"' || ch === "'") {              // 字符串、带引号的表名原样保留
+        let j = i + 1;
+        while (j < s.length && !(s[j] === ch && s[j + 1] !== ch)) j += s[j] === ch ? 2 : 1;
+        out += s.slice(i, j + 1);
+        i = j + 1;
+        continue;
+      }
+      const m = /^AGGREGATE\s*\(/i.exec(s.slice(i));
+      if (m && !/[A-Za-z0-9_.]/.test(s[i - 1] || '')) {
+        const open = i + m[0].length - 1;
+        const close = matchParen(s, open);
+        if (close > 0) {
+          const args = splitArgs(s.slice(open + 1, close)).map(a => aggregateArrays(a, mode));
+          if (args.length === 4 && /^\s*1[4-9]\s*$/.test(args[0])) {
+            const inner = unwrapIndex(args[2]);
+            args[2] = mode === 'wrap' ? 'INDEX(' + (inner === null ? args[2].trim() : inner) + ',0)' : (inner === null ? args[2] : inner);
+          }
+          out += s.slice(i, open + 1) + args.join(',') + ')';
+          i = close + 1;
+          continue;
+        }
+      }
+      out += ch;
+      i++;
+    }
     return out;
+  }
+
+  function matchParen(s, open) {
+    let depth = 0;
+    for (let i = open; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === '"' || ch === "'") {
+        let j = i + 1;
+        while (j < s.length && !(s[j] === ch && s[j + 1] !== ch)) j += s[j] === ch ? 2 : 1;
+        i = j;
+        continue;
+      }
+      if (ch === '(') depth++;
+      else if (ch === ')' && --depth === 0) return i;
+    }
+    return -1;
+  }
+
+  function splitArgs(s) {
+    const args = [];
+    let depth = 0, cur = '';
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === '"' || ch === "'") {
+        let j = i + 1;
+        while (j < s.length && !(s[j] === ch && s[j + 1] !== ch)) j += s[j] === ch ? 2 : 1;
+        cur += s.slice(i, j + 1);
+        i = j;
+        continue;
+      }
+      if (ch === '(' || ch === '{') depth++;
+      if (ch === ')' || ch === '}') depth--;
+      if (ch === ',' && depth === 0) { args.push(cur); cur = ''; continue; }
+      cur += ch;
+    }
+    args.push(cur);
+    return args;
+  }
+
+  /** 'INDEX(X,0)' → 'X'；不是这种形式返回 null */
+  function unwrapIndex(a) {
+    const t = a.trim();
+    const m = /^INDEX\s*\(/i.exec(t);
+    if (!m || matchParen(t, m[0].length - 1) !== t.length - 1) return null;
+    const parts = splitArgs(t.slice(m[0].length, -1));
+    return parts.length === 2 && parts[1].trim() === '0' ? parts[0].trim() : null;
   }
 
   function rangeText(hit, mode, ctx) {
@@ -164,7 +249,7 @@
 
   /** 转成预览引擎可识别的写法（引擎不认裸 TRUE/FALSE） */
   function toEngine(f) {
-    return segments(f).map(s => {
+    return segments(aggregateArrays(f, 'unwrap')).map(s => {
       if (s.t !== 'other') return s.v;
       return s.v.replace(/(^|[^A-Za-z0-9_.$])(TRUE|FALSE)(?![A-Za-z0-9_.(])/gi, (m, p, w) => p + w.toUpperCase() + '()');
     }).join('');
@@ -190,5 +275,5 @@
     return html;
   }
 
-  EFA.Formula = { segments, parseDslRef, listRefs, expand, functionsUsed, checkFunctions, toEngine, highlight };
+  EFA.Formula = { segments, parseDslRef, listRefs, expand, functionsUsed, checkFunctions, toEngine, highlight, aggregateArrays };
 })(window.EFA = window.EFA || {});

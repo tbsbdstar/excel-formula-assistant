@@ -1396,7 +1396,7 @@
     return plan('column', [{ title: titleHint(q) || title, formula: f, format: 'general' }], {
       interpretation: '每行显示本行所在【' + g.name + '】的' + (target && a.type !== 'count' ? '【' + target.name + '】' : '') + AGG_NAMES[a.type] + (/与/.test(title) ? '，并计算本行与它的差' : ''),
       explanation: '条件用“本行的' + g.name + '”（[@' + g.name + ']），这样每一行算出来的都是自己所在' + g.name + '的统计值。' +
-        (/AGGREGATE/.test(f) ? 'AGGREGATE(14/15,6,…) 是 Excel 2016 里做“带条件最大/最小值”的写法，不需要数组公式。' : ''),
+        (/AGGREGATE/.test(f) ? 'AGGREGATE(14/15,6,…) 是 Excel 2016 里做“带条件最大/最小值”的写法，外面的 INDEX(…,0) 让它按数组计算，不需要按 Ctrl+Shift+Enter。' : ''),
     });
   }
 
@@ -1573,7 +1573,7 @@
       if (/SUMIFS?\(/.test(used)) expl += 'SUMIF/SUMIFS 只把满足条件的行加起来；';
       if (/COUNTIFS?\(/.test(used)) expl += 'COUNTIF/COUNTIFS 统计满足条件的行数；';
       if (/AVERAGEIFS?\(/.test(used)) expl += 'AVERAGEIF/AVERAGEIFS 只对满足条件的行求平均；';
-      if (/AGGREGATE/.test(used)) expl += 'AGGREGATE(14/15,6,区域/(条件),1) 是 Excel 2016 求“带条件最大/最小值”的写法，不满足条件的行会变成错误值并被忽略；';
+      if (/AGGREGATE/.test(used)) expl += 'AGGREGATE(14/15,6,INDEX(区域/(条件),0),1) 是 Excel 2016 求“带条件最大/最小值”的写法，不满足条件的行会变成错误值并被忽略；';
       if (/EDATE/.test(used)) expl += '按月/年分组时，条件写成“日期 ≥ 该月第一天 且 < 下个月第一天”（EDATE 推算下个月）；';
       return plan('group', outs, {
         groupBy: gs.map(g => ({ column: g.col.name, unit: g.unit })),
@@ -1600,7 +1600,7 @@
     else if (/COUNTIF\(/.test(used)) expl += 'COUNTIF(区域, 条件) 统计满足条件的单元格个数。';
     if (/AVERAGEIFS\(/.test(used)) expl += 'AVERAGEIFS 对同时满足条件的行求平均。';
     else if (/AVERAGEIF\(/.test(used)) expl += 'AVERAGEIF(条件区域, 条件, 求平均区域) 对满足条件的行求平均。';
-    if (/AGGREGATE/.test(used)) expl += 'Excel 2016 没有 MAXIFS/MINIFS，用 AGGREGATE(14或15, 6, 区域/(条件), 1) 代替：不满足条件的行除以 0 变成错误值，第 2 参数 6 表示忽略错误值。';
+    if (/AGGREGATE/.test(used)) expl += 'Excel 2016 没有 MAXIFS/MINIFS，用 AGGREGATE(14或15, 6, INDEX(区域/(条件),0), 1) 代替：不满足条件的行除以 0 变成错误值，第 2 参数 6 表示忽略错误值，INDEX(…,0) 让它按数组计算。';
     if (/SUMPRODUCT\(\(/.test(used) && !/COUNTIF\(/.test(used)) expl += 'SUMPRODUCT 把每个条件算成 1/0 再相乘求和，可以表达 SUMIFS 写不了的条件（如按月份）。';
     if (/COUNTIF\([^)]*&""\)/.test(used)) expl += '不重复计数：COUNTIF 算出每个值出现的次数，取倒数后相加，每个不同的值正好贡献 1。';
     if (/COUNTA\(/.test(used)) expl += 'COUNTA 统计非空单元格个数，用来数数据有多少行。';

@@ -8,6 +8,7 @@
     {"id": "row", "label": "行"},
     {"id": "fill", "label": "填充与格式"},
     {"id": "match", "label": "跨表匹配与比对"},
+    {"id": "merge", "label": "多文件合并与分组汇总"},
     {"id": "copy", "label": "复制区块 / 工作表"},
     {"id": "check", "label": "校验"}
   ],
@@ -170,6 +171,31 @@
        {"key": "highlight", "type": "color", "label": "差异单元格底色", "default": "FFEB9C", "nullable": true},
        {"key": "report_sheet", "type": "optText", "label": "在结果里新建比对报告表", "defaultText": "比对报告"},
        {"key": "export_csv", "type": "bool", "label": "另外导出差异明细 CSV", "default": false}
+     ]},
+
+    {"op": "append_rows", "label": "追加行（多文件合并）", "group": "merge",
+     "desc": "把参照表的数据行接到主表末尾，按表头名称对应列（列顺序不同也没关系）。参照表设为“多个文件”时，会把所有符合规则的文件都接上（如各门店的表）。主表最后一行的公式和汇总范围会自动延续到新行。",
+     "fields": [
+       {"key": "from", "type": "sheetSource", "label": "从哪个文件追加", "required": true},
+       {"key": "source_column", "type": "text", "label": "写入来源文件名的列", "placeholder": "如：来源文件（不填=不写）"},
+       {"key": "add_missing_columns", "type": "bool", "label": "来源有、主表没有的列也加进来（加在最后）", "default": false},
+       {"key": "extend_formulas", "type": "bool", "label": "来源里没有的列，按主表最后一行的公式补上（来源有值的列照抄来源的值）", "default": true},
+       {"key": "skip_blank", "type": "bool", "label": "跳过整行为空的行", "default": true},
+       {"key": "where", "type": "condition", "source": "from", "label": "只追加符合条件的行", "help": "条件里的列是来源文件的列"}
+     ]},
+    {"op": "group_summary", "label": "分组汇总", "group": "merge",
+     "desc": "按一列或多列分组，计算合计、记录数、平均、最大、最小，生成一张新的汇总工作表。默认写成公式，数据改了打开文件就自动更新。",
+     "fields": [
+       {"key": "group_by", "type": "columns", "label": "按哪些列分组", "required": true},
+       {"key": "metrics", "type": "metrics", "label": "汇总指标", "required": true},
+       {"key": "sheet_name", "type": "text", "label": "汇总表名称", "placeholder": "分组汇总"},
+       {"key": "mode", "type": "enum", "label": "写入方式", "default": "formula",
+        "options": [{"value": "formula", "label": "公式（数据变了打开即更新）"}, {"value": "value", "label": "结果值（可用“不重复个数”和筛选条件）"}]},
+       {"key": "sort", "type": "enum", "label": "排列顺序", "default": "key",
+        "options": [{"value": "key", "label": "按分组列升序"}, {"value": "metric_desc", "label": "按第一个指标从大到小"}]},
+       {"key": "total_row", "type": "bool", "label": "最后加一行合计", "default": true},
+       {"key": "replace", "type": "bool", "label": "已有同名工作表时替换", "default": false},
+       {"key": "where", "type": "condition", "label": "只汇总符合条件的行", "help": "只能配合“结果值”方式；用公式方式时，可先用“删除行”去掉不要的行"}
      ]},
 
     {"op": "copy_range", "label": "区块复制", "group": "copy",

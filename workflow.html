@@ -52,14 +52,20 @@
     <section class="panel wf-panel area-steps" aria-labelledby="hSteps">
       <div class="panel-head">
         <h2 class="panel-title" id="hSteps"><span class="step-no">2</span>处理步骤<span class="count" id="stepCount"></span></h2>
-        <button id="btnAddStep" class="btn btn-primary btn-sm" type="button">＋ 添加步骤</button>
+        <div class="row">
+          <button id="btnAi" class="btn btn-ghost btn-sm" type="button" title="用一句话描述流程，由 AI 生成步骤，确认后加入（需要 API Key）">✨ 用一句话生成</button>
+          <button id="btnAddStep" class="btn btn-primary btn-sm" type="button">＋ 添加步骤</button>
+        </div>
       </div>
       <p class="panel-intro">按从上到下的顺序执行。可拖动 <span class="kbd">⋮⋮</span> 调整顺序，点击步骤展开修改参数。</p>
       <ol id="stepList" class="step-list"></ol>
       <div id="stepsEmpty" class="steps-empty" hidden>
         <h3>还没有步骤</h3>
-        <p>点“添加步骤”，从删列、插列、按条件着色、两表匹配回填、比对、复制、校验等操作中选择；也可以点右上角“从示例开始”。</p>
-        <button class="btn btn-primary" type="button" id="btnAddFirst">＋ 添加第一个步骤</button>
+        <p>点“添加步骤”，从删列、插列、按条件着色、两表匹配回填、比对、多文件合并、分组汇总、校验等操作中选择；也可以用一句话描述让 AI 生成，或点右上角“从示例开始”。</p>
+        <div class="row" style="justify-content:center">
+          <button class="btn btn-ghost" type="button" id="btnAiFirst">✨ 用一句话生成</button>
+          <button class="btn btn-primary" type="button" id="btnAddFirst">＋ 添加第一个步骤</button>
+        </div>
       </div>
     </section>
 
@@ -108,6 +114,34 @@
     </form>
   </dialog>
 
+  <!-- AI 生成步骤 -->
+  <dialog id="aiDialog" class="dialog ai-dialog">
+    <form method="dialog">
+      <h2>用一句话生成步骤 <span class="muted">（AI）</span></h2>
+      <p class="dlg-intro">描述你要对表格做的处理，AI 会从内置操作里组合出步骤。生成的步骤会按同样的规则检查，由你勾选确认后才加入。AI 只生成配置，不生成也不运行任何程序。</p>
+      <div id="aiNoKey" class="notice info" hidden>还没有设置 API Key（DeepSeek 或通义千问）。<button type="button" class="btn btn-text btn-sm" id="aiSetKey">去设置</button></div>
+      <div id="aiNoSample" class="notice warn" hidden>还没有载入样例文件：AI 不知道表格有哪些列，生成的步骤可能用错列名。建议先在左侧载入样例。</div>
+      <label class="field"><span>要做的处理</span>
+        <textarea id="aiRequest" rows="4" placeholder="例如：删掉内部备注列；用客户编码匹配客户档案，把区域写到最后；金额大于 1 万的行标黄；最后按区域汇总金额。"></textarea></label>
+      <div class="row ai-row">
+        <select id="aiMode" class="in">
+          <option value="append">生成的步骤接在现有步骤后面</option>
+          <option value="replace">替换现有的全部步骤</option>
+        </select>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-primary" id="aiGo">生成</button>
+      </div>
+      <div id="aiStatus" class="ai-status" aria-live="polite"></div>
+      <div id="aiResult" class="ai-result"></div>
+      <div class="dlg-actions">
+        <button type="button" class="btn btn-text btn-sm" id="aiSettings">AI 设置</button>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost" value="cancel">关闭</button>
+        <button type="button" class="btn btn-primary" id="aiApply" hidden>加入选中的步骤</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- 查看 JSON -->
   <dialog id="jsonDialog" class="dialog json-dialog">
     <form method="dialog">
@@ -125,13 +159,17 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="vendor/xlsx.full.min.js"></script>
+  <script src="js/limits.js"></script>
   <script src="js/util.js"></script>
+  <script src="js/llm.js"></script>
+  <script src="js/ai-settings.js"></script>
   <script src="js/wf-catalog.js"></script>
   <script src="js/wf-examples.js"></script>
   <script src="js/wf-files.js"></script>
   <script src="js/wf-model.js"></script>
   <script src="js/wf-fields.js"></script>
   <script src="js/wf-zip.js"></script>
+  <script src="js/wf-ai.js"></script>
   <script src="js/wf-app.js"></script>
 </body>
 </html>

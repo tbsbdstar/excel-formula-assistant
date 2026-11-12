@@ -103,7 +103,7 @@
   function checkDaily() {
     const u = getUsage();
     if (u.limit > 0 && u.calls >= u.limit) {
-      const e = new Error('今天的 AI 调用次数已达上限（' + u.limit + ' 次）。可以在“AI 设置”里调高上限，或明天再试；内置模板不受影响。');
+      const e = new Error('今天的 AI 调用次数已达上限（' + u.limit + ' 次）。可以在“AI 设置”里调高上限，或明天再试；不用 AI 的功能不受影响。');
       e.kind = 'limit';
       throw e;
     }
@@ -446,5 +446,6 @@
   EFA.LLM = {
     PROVIDERS, PROVIDER_LIST, getSettings, saveSettings, clearKey, isConfigured, providerName, modelName, generate,
     buildContext, contextWithinBudget, estimateTokens, estimateRequest, getUsage, endpoint, systemPrompt,
+    chat, extractJson, checkDaily,
   };
 })(window.EFA = window.EFA || {});

@@ -65,6 +65,7 @@
     const files = Array.from(fileList || []);
     if (!files.length) return;
     let added = 0;
+    const created = [], skipped = [];
     for (const file of files) {
       let smp;
       try {
@@ -75,6 +76,11 @@
       }
       let spec = targetId ? M.fileSpec(targetId) : null;
       if (!spec) spec = S.cfg.files.find(f => !S.samples[f.id] && f.match && F.matchPattern(f.match, file.name)) || null;
+      // 属于已经有样例的“多个文件”：同类文件只需要一个样例，不再新建文件
+      if (!spec && S.cfg.files.some(f => f.multiple && S.samples[f.id] && f.match && F.matchPattern(f.match, file.name))) {
+        skipped.push(file.name);
+        continue;
+      }
       if (!spec) {
         const role = S.cfg.files.some(f => f.role === 'main') ? 'ref' : 'main';
         const pattern = F.suggestPattern(file.name);
@@ -82,16 +88,55 @@
         const hr = smp.sheets[0] ? smp.sheets[0].headerRow : 1;
         if (hr !== 1) spec.header_row = hr;
         S.cfg.files.push(spec);
+        created.push(spec.id);
       }
       S.samples[spec.id] = smp;
       targetId = null;
       added++;
     }
+    // 一次拖入的几个文件表头完全相同：可能是要合并的同类文件（各门店、各月），给出一键设置的提示
+    S.mergeHint = null;
+    if (created.length >= 2) {
+      // 合并按表头名称对应列：只看有哪些列、不看顺序；大部分列相同（个别文件多一两列）也算同类
+      const cols = created.map(id => { const f = M.fileSpec(id); return new Set((F.headerList(M.sampleSheet(id), f.header_row || 1) || []).filter(Boolean)); });
+      const union = new Set(cols.flatMap(s => [...s]));
+      const common = [...union].filter(c => cols.every(s => s.has(c)));
+      if (common.length >= 3 && common.length / union.size >= 0.7) {
+        S.mergeHint = { ids: created.slice(), partial: [...union].filter(c => !common.includes(c)) };
+      }
+    }
     if (added) {
       renderAll();
       saveDraft();
-      toast('已载入 ' + added + ' 个样例文件');
     }
+    if (added || skipped.length) {
+      toast((added ? '已载入 ' + added + ' 个样例文件' : '') + (skipped.length ? (added ? '；' : '') + skipped.join('、') + ' 属于“多个文件”，同类文件有一个样例就够了，未重复载入' : ''), 5000);
+    }
+  }
+
+  /** 把几个同类文件设为：第一个作主表，其余用一个“多个文件”参照表表示，并加一步“追加行” */
+  function applyMergeHint() {
+    const ids = (S.mergeHint || {}).ids || [];
+    if (ids.length < 2) return;
+    const names = ids.map(id => S.samples[id] ? S.samples[id].fileName : '').filter(Boolean);
+    const pattern = F.commonPattern(names);
+    const mainSpec = M.fileSpec(ids[0]);
+    S.cfg.files.forEach(f => { if (f.role === 'main' && f.id !== ids[0]) f.role = 'ref'; });
+    mainSpec.role = 'main';
+    delete mainSpec.multiple;
+    mainSpec.match = pattern;
+    const multi = M.fileSpec(ids[1]);
+    multi.role = 'ref';
+    multi.multiple = true;
+    multi.match = pattern;
+    const core = pattern.replace(/\*/g, '').replace(/\.[^.]+$/, '');
+    multi.label = (core.length >= 2 ? core : '同类文件') + '（其余文件）';
+    ids.slice(2).forEach(id => { S.cfg.files = S.cfg.files.filter(f => f.id !== id); delete S.samples[id]; });
+    if (!S.cfg.steps.some(s => s.op === 'append_rows')) S.cfg.steps.unshift({ op: 'append_rows', from: { file: multi.id }, source_column: '来源文件' });
+    S.mergeHint = null;
+    openIdx = null;
+    renderAll(); saveDraft();
+    toast('已设置：符合「' + pattern + '」的文件里，第一个作主表，其余全部追加进来（第 1 步）。规则可以在左侧修改', 6000);
   }
 
   function renderFiles() {
@@ -99,6 +144,16 @@
     list.textContent = '';
     $('fileCount').textContent = S.cfg.files.length ? '（' + S.cfg.files.length + '）' : '';
     const mainId = M.mainId();
+    const hint = S.mergeHint && S.mergeHint.ids.every(id => M.fileSpec(id)) ? S.mergeHint : null;
+    if (hint) {
+      list.append(h('div', { class: 'merge-hint' },
+        h('div', null, h('b', null, '这 ' + hint.ids.length + ' 个文件的列' + (hint.partial && hint.partial.length ? '基本相同' : '相同（顺序可以不同）') + '。'),
+          '要把它们合并成一张表吗？（例如各门店、各月份的同一种表）' +
+          (hint.partial && hint.partial.length ? '只在部分文件里有的列：' + hint.partial.join('、') + '（合并时可选择是否保留）。' : '')),
+        h('div', { class: 'row' },
+          h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: applyMergeHint }, '设为合并：第一个作主表，其余追加'),
+          h('button', { type: 'button', class: 'btn btn-text btn-sm', onclick: () => { S.mergeHint = null; renderFiles(); } }, '不用，它们用途不同'))));
+    }
     S.cfg.files.forEach(spec => list.append(fileCard(spec, mainId)));
     renderFileMsgs();
   }
@@ -109,7 +164,7 @@
     const labelIn = h('input', { class: 'in label-in', value: spec.label || '', placeholder: '给这个文件起个名字，如：本周订单', 'aria-label': '文件名称' });
     labelIn.addEventListener('input', () => { spec.label = labelIn.value.trim() || undefined; changed(); });
     card.append(h('div', { class: 'fc-head' },
-      h('span', { class: 'role ' + spec.role }, spec.role === 'main' ? '主表' : '参照表'),
+      h('span', { class: 'role ' + spec.role }, spec.role === 'main' ? '主表' : (spec.multiple ? '参照表 · 多个' : '参照表')),
       labelIn,
       h('button', { type: 'button', class: 'icon-btn', title: '移除这个文件', 'aria-label': '移除文件', onclick: () => removeFile(spec.id) }, '×')));
     const body = h('div', { class: 'fc-body' });
@@ -144,6 +199,19 @@
     patIn.addEventListener('input', () => { spec.match = patIn.value.trim() || undefined; markPat(); changed(); });
     markPat();
     body.append(h('div', { class: 'fc-line' }, h('span', null, '文件名规则'), h('div', { class: 'stack', style: 'gap:3px' }, patIn, patMsg)));
+    if (spec.role === 'ref') {
+      const mc = h('input', { type: 'checkbox', checked: !!spec.multiple });
+      mc.addEventListener('change', () => {
+        if (mc.checked) {
+          spec.multiple = true;
+          // 规则通常要放宽，才能匹配到同一类的所有文件
+          if (spec.match && smp && spec.match === F.suggestPattern(smp.fileName)) toast('提示：确认文件名规则能匹配到所有这类文件，例如 *门店*.xlsx', 5000);
+        } else delete spec.multiple;
+        renderAll(); saveDraft();
+      });
+      body.append(h('div', { class: 'fc-line' }, h('span', null, '多个文件'),
+        h('label', { class: 'ck' }, mc, h('span', null, '把所有符合规则的文件都读进来（用于“追加行”合并）'))));
+    }
     // 工作表与表头行
     let sheetCtl;
     if (smp && smp.sheets.length) {
@@ -204,7 +272,7 @@
 
   function setRole(id, role) {
     S.cfg.files.forEach(f => {
-      if (f.id === id) f.role = role;
+      if (f.id === id) { f.role = role; if (role === 'main') delete f.multiple; }
       else if (role === 'main' && f.role === 'main') f.role = 'ref';
     });
     renderAll(); saveDraft();
@@ -384,6 +452,7 @@
       if (ms.length) s.match = ms[ms.length - 1].id;
     }
     if (op === 'validate') s.checks = [{ type: 'not_empty' }];
+    if (op === 'group_summary') { s.group_by = []; s.metrics = [{ func: 'sum', column: '' }]; }
     if (op === 'insert_column') s.end = true;
     S.cfg.steps.splice(at, 0, s);
     openIdx = at;
@@ -422,6 +491,7 @@
           return info ? info.headers : null;
         }
         if (source === 'refFile') return sm.headersAt(i, s.ref, s.ref_sheet, s.ref_header_row);
+        if (source === 'from') return M.fromHeaders(i, s, sm);
         if (source === 'ck') return sm.headersAt(i, s.file || M.mainId(), s.sheet, s.header_row);
         const t = M.stepTarget(s);
         return sm.headersAt(i, t.fileId, t.sheet, t.headerRow);
@@ -643,6 +713,100 @@
     $('jsonDialog').showModal();
   }
 
+  /* ------------------------------------------------------------------ AI 生成步骤 */
+  let aiResult = null, aiAbort = null;
+
+  function openAi() {
+    const L = EFA.LLM;
+    $('aiNoKey').hidden = L.isConfigured();
+    const noFiles = !S.cfg.files.length;
+    const missing = S.cfg.files.filter(f => !S.samples[f.id]);
+    $('aiNoSample').hidden = !noFiles && !missing.length;
+    $('aiNoSample').textContent = noFiles ? '还没有文件：请先在左侧载入样例文件（至少主表），AI 才知道表格有哪些列。'
+      : '「' + missing.map(f => f.label || f.id).join('」「') + '」还没有载入样例：AI 不知道它有哪些列，生成的步骤可能用错列名。建议先在左侧载入样例。';
+    $('aiMode').value = 'append';
+    $('aiMode').disabled = !S.cfg.steps.length;
+    $('aiDialog').showModal();
+    setTimeout(() => $('aiRequest').focus(), 50);
+  }
+
+  async function runAi() {
+    const req = $('aiRequest').value.trim();
+    if (!req) { $('aiRequest').focus(); return; }
+    if (!EFA.LLM.isConfigured()) { EFA.AISettings.open(() => { $('aiNoKey').hidden = EFA.LLM.isConfigured(); }); return; }
+    if (!S.cfg.files.length) { toast('请先载入样例文件（至少主表）'); return; }
+    if (aiAbort) aiAbort.abort();
+    aiAbort = new AbortController();
+    aiResult = null;
+    $('aiResult').textContent = '';
+    $('aiApply').hidden = true;
+    $('aiGo').disabled = true;
+    const status = $('aiStatus');
+    status.className = 'ai-status busy';
+    status.textContent = '正在生成…';
+    try {
+      const res = await EFA.WFAI.generate(req, { mode: $('aiMode').value, signal: aiAbort.signal, onStatus: t => { status.textContent = t; } });
+      aiResult = res;
+      status.className = 'ai-status';
+      status.textContent = '';
+      renderAiResult();
+    } catch (e) {
+      status.className = 'ai-status err';
+      status.textContent = (e.kind === 'need_clarification' ? '需要补充说明：' : e.kind === 'unsupported' ? '做不到：' : '') + (e.message || String(e));
+      if (e.kind === 'nokey') EFA.AISettings.open();
+    } finally {
+      $('aiGo').disabled = false;
+      aiAbort = null;
+    }
+  }
+
+  function renderAiResult() {
+    const box = $('aiResult');
+    box.textContent = '';
+    const r = aiResult;
+    if (!r) return;
+    const nErr = r.issues.filter(a => a.some(m => m.level === 'error')).length;
+    box.append(h('div', { class: 'ai-head' }, '生成了 ' + r.steps.length + ' 个步骤' + (nErr ? '，其中 ' + nErr + ' 个还有问题（可以先加入再修改）' : '，检查通过'),
+      h('span', { class: 'hint' }, ' · ' + r.model + ' · 调用 ' + r.usage.calls + ' 次，约 ' + (r.usage.inTok + r.usage.outTok || r.usage.estimate).toLocaleString() + ' tokens')));
+    const list = h('ol', { class: 'ai-steps' });
+    r.steps.forEach((s, i) => {
+      const def = M.OPS[s.op];
+      const msgs = r.issues[i] || [];
+      const st = msgs.some(m => m.level === 'error') ? 'error' : msgs.length ? 'warn' : 'ok';
+      const cb = h('input', { type: 'checkbox', checked: true, 'data-i': i, 'aria-label': '加入这一步' });
+      list.append(h('li', { class: 'ai-step' },
+        h('label', { class: 'ai-pick' }, cb,
+          h('span', { class: 'sc-status ' + st }, st === 'ok' ? '✓' : st === 'warn' ? '!' : '✕'),
+          h('span', { class: 'ai-txt' }, h('b', null, s.title || (def ? def.label : s.op)), h('span', { class: 'sc-op' }, def ? def.label : '未知操作 ' + s.op),
+            h('span', { class: 'ai-sum' }, def ? M.summary(s) : ''))),
+        msgs.length ? h('ul', { class: 'msgs' }, msgs.map(m => h('li', { class: m.level }, m.msg))) : null));
+    });
+    box.append(list);
+    if (r.explanation) box.append(h('div', { class: 'ai-expl' }, h('b', null, '说明：'), r.explanation));
+    if (r.assumptions.length) box.append(h('div', { class: 'ai-expl' }, h('b', null, 'AI 的假设（请核对）：'), h('ul', null, r.assumptions.map(a => h('li', null, a)))));
+    $('aiApply').hidden = false;
+  }
+
+  function applyAi() {
+    if (!aiResult) return;
+    const picked = [...document.querySelectorAll('#aiResult input[type=checkbox]')].filter(c => c.checked).map(c => Number(c.getAttribute('data-i')));
+    if (!picked.length) { toast('没有勾选步骤'); return; }
+    const steps = picked.map(i => JSON.parse(JSON.stringify(aiResult.steps[i])));
+    if ($('aiMode').value === 'replace' && S.cfg.steps.length) {
+      if (!confirm('用生成的 ' + steps.length + ' 个步骤替换现有的 ' + S.cfg.steps.length + ' 个步骤？')) return;
+      S.cfg.steps = steps;
+    } else {
+      S.cfg.steps = S.cfg.steps.concat(steps);
+    }
+    openIdx = null;
+    $('aiDialog').close();
+    renderAll(); saveDraft();
+    const bad = M.validate().steps.filter(a => a.some(m => m.level === 'error')).length;
+    toast('已加入 ' + steps.length + ' 个步骤' + (bad ? '，有 ' + bad + ' 个步骤标红，请展开修改' : '，请检查每一步的参数'), 5000);
+    const first = document.querySelector('#stepList > .step-card:last-child');
+    if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
   /* ------------------------------------------------------------------ 导入 / 新建 / 示例 */
   function loadConfig(obj, source) {
     let cfg;
@@ -705,6 +869,14 @@
     });
 
     $('btnAddStep').addEventListener('click', openOpDialog);
+    $('btnAi').addEventListener('click', openAi);
+    $('btnAiFirst').addEventListener('click', openAi);
+    $('aiGo').addEventListener('click', runAi);
+    $('aiApply').addEventListener('click', applyAi);
+    $('aiSettings').addEventListener('click', () => EFA.AISettings.open(() => { $('aiNoKey').hidden = EFA.LLM.isConfigured(); }));
+    $('aiSetKey').addEventListener('click', () => EFA.AISettings.open(() => { $('aiNoKey').hidden = EFA.LLM.isConfigured(); }));
+    $('aiDialog').addEventListener('close', () => { if (aiAbort) aiAbort.abort(); });
+    $('aiRequest').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runAi(); } });
     $('btnAddFirst').addEventListener('click', openOpDialog);
     $('btnOpen').addEventListener('click', () => $('openInput').click());
     $('openInput').addEventListener('change', e => { openConfigFile(e.target.files[0]); e.target.value = ''; });

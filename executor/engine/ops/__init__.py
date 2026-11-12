@@ -185,4 +185,4 @@ def row_getter(ctx, view, colof=None):
 
 def load_all():
     """加载内置操作模块"""
-    from . import columns, rows, fill, style, match, copyops, check  # noqa: F401
+    from . import columns, rows, fill, style, match, copyops, check, merge  # noqa: F401

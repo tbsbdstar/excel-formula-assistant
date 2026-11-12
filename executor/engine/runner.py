@@ -20,8 +20,9 @@ from .report import Report
 
 
 class Context:
-    def __init__(self, files, main, report):
+    def __init__(self, files, main, report, multi=None):
         self.files = files
+        self.multi = multi or {}
         self.main = main
         self.report = report
         self.matches = {}
@@ -29,9 +30,17 @@ class Context:
         self._step_warnings = None
 
     def file(self, fid):
+        if fid in self.multi:
+            raise StepError(f"「{fid}」是“多个文件”，只能在“追加行（多文件合并）”里使用")
         if fid not in self.files:
             raise StepError(f"配置里没有 id 为「{fid}」的文件")
         return self.files[fid]
+
+    def files_of(self, fid):
+        """单个文件返回 [文件]；“多个文件”返回全部匹配到的文件"""
+        if fid in self.multi:
+            return self.multi[fid]
+        return [self.file(fid)]
 
     def view(self, step):
         fh = self.file(step.get("file", self.main.id))
@@ -67,7 +76,7 @@ def output_name(cfg, main_path):
 
 
 def run(cfg: dict, paths: dict, out_dir, recalc=None, progress=print) -> Report:
-    """paths: {文件id: 路径}；recalc: None 按配置；'off'/'auto'/'required' 覆盖"""
+    """paths: {文件id: 路径（“多个文件”为路径列表）}；recalc: None 按配置；'off'/'auto'/'required' 覆盖"""
     load_all()
     report = Report(cfg)
     out_dir = Path(out_dir)
@@ -75,18 +84,26 @@ def run(cfg: dict, paths: dict, out_dir, recalc=None, progress=print) -> Report:
     try:
         cfgmod.validate(cfg)
         main_id = cfgmod.main_id(cfg)
-        files = {}
+        files, multi = {}, {}
         for spec in cfg["files"]:
             p = paths.get(spec["id"])
-            if not p:
-                raise StepError(f"没有提供「{spec.get('label') or spec['id']}」的文件")
-            if not Path(p).is_file():
-                raise StepError(f"找不到文件：{p}")
-            files[spec["id"]] = FileHandle(spec, str(p), writable=spec["id"] == main_id)
+            label = spec.get("label") or spec["id"]
+            plist = [x for x in (p if isinstance(p, (list, tuple)) else [p]) if x]
+            if not plist:
+                raise StepError(f"没有提供「{label}」的文件")
+            if len(plist) > 1 and not spec.get("multiple"):
+                raise StepError(f"「{label}」只能对应一个文件，现在给了 {len(plist)} 个")
+            for x in plist:
+                if not Path(x).is_file():
+                    raise StepError(f"找不到文件：{x}")
+            if spec.get("multiple"):
+                multi[spec["id"]] = [FileHandle(dict(spec, label=f"{label}：{Path(x).name}"), str(x), writable=False) for x in plist]
+            else:
+                files[spec["id"]] = FileHandle(spec, str(plist[0]), writable=spec["id"] == main_id)
         main = files[main_id]
         stem = Path(output_name(cfg, main.path)).stem
         progress(f"正在读取文件…")
-        for fh in files.values():
+        for fh in list(files.values()) + [h for hs in multi.values() for h in hs]:
             t0 = time.time()
             fh.open()
             v = fh.view()
@@ -96,7 +113,7 @@ def run(cfg: dict, paths: dict, out_dir, recalc=None, progress=print) -> Report:
                 report.warnings.append(f"主表中的{'、'.join(fh.dropped_features)}在结果文件中不会保留（执行器不支持这些内容）")
             if fh.no_cached_values:
                 report.warnings.append(f"「{fh.label}」里的公式没有保存计算结果（文件可能不是用 Excel/WPS 保存的），条件和匹配中用到公式列时会按空值处理。用 Excel/WPS 打开后保存一次即可")
-        ctx = Context(files, main, report)
+        ctx = Context(files, main, report, multi)
         steps = [s for s in cfg["steps"] if s.get("enabled", True) is not False]
         for i, step in enumerate(cfg["steps"], 1):
             d = REGISTRY[step["op"]]

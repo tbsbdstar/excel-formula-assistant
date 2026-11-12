@@ -217,6 +217,21 @@
           ensure(s.diff_column === undefined ? '差异列' : s.diff_column);
           break;
         }
+        case 'append_rows': {
+          const src = s.from || {};
+          const srcSpec = cfg.files.find(f => f.id === src.file) || {};
+          const sh = M.sampleSheet(src.file, src.sheet);
+          const sh2 = sh ? F.headerList(sh, src.header_row || srcSpec.header_row || 1) : null;
+          if (s.source_column && M.resolveCol(h, s.source_column).error) h.push(F.normHeader(s.source_column));
+          if (s.add_missing_columns && sh2) sh2.forEach(x => { if (x && !h.includes(x)) h.push(x); });
+          break;
+        }
+        case 'group_summary': {
+          const name = String(s.sheet_name || '分组汇总').trim();
+          if (!extraSheets.includes(name)) extraSheets.push(name);
+          changed = false;
+          break;
+        }
         case 'copy_sheet': {
           const src = s.from || {};
           const srcSheet = M.sampleSheet(src.file || mainId, src.sheet);
@@ -274,6 +289,23 @@
     if (!m) return null;
     const headers = sim.headersAt(i, m.ref, m.step.ref_sheet, m.step.ref_header_row);
     return { fileId: m.ref, headers, step: m.step };
+  };
+
+  /** 一个步骤引用到的文件 id（与执行器 config._file_refs 一致） */
+  M.fileRefs = function (s) {
+    const out = [];
+    if (s.file) out.push(s.file);
+    if (s.op === 'match' && s.ref) out.push(s.ref);
+    ['from', 'formula_from'].forEach(k => { const v = s[k]; if (v && typeof v === 'object' && !Array.isArray(v) && v.file) out.push(v.file); });
+    (Array.isArray(s.checks) ? s.checks : []).forEach(ck => { if (ck && ck.type === 'headers_match') out.push(ck.file || 'ref'); });
+    return out;
+  };
+
+  /** 追加行步骤的来源表头 */
+  M.fromHeaders = function (i, s, sim) {
+    const src = (s && s.from) || {};
+    if (!src.file) return null;
+    return sim.headersAt(i, src.file, src.sheet, src.header_row);
   };
 
   /** 某一步作用的目标表 */
@@ -374,15 +406,19 @@
       if (f.header_row !== undefined && !(Number.isInteger(f.header_row) && f.header_row >= 1)) add(arr, 'error', '表头行应是 ≥1 的整数');
       const smp = cfgSample(f.id);
       if (!f.match) add(arr, 'warn', '没有文件名规则：运行时会提示把文件拖进窗口');
+      else if (/^\*+(\.[A-Za-z]+)?$/.test(f.match.trim())) add(arr, 'warn', '文件名规则「' + f.match + '」会匹配 input 里的所有 Excel 文件。建议写得具体一些（如 *门店*.xlsx），或确保 input 里只放这一类文件');
       else if (smp && !F.matchPattern(f.match, smp.fileName)) add(arr, 'warn', '样例文件名「' + smp.fileName + '」不符合文件名规则，运行时可能找不到');
       if (f.match) {
         cfg.files.forEach(o => {
           const os = cfgSample(o.id);
-          if (o !== f && os && F.matchPattern(f.match, os.fileName)) add(arr, 'warn', '规则也能匹配到「' + (o.label || o.id) + '」的文件（' + os.fileName + '），两个文件同时放在 input 里时会让你选择');
+          // “多个文件”会收下其余全部匹配的文件，不会让人选择，所以只提醒两个单文件之间的重叠
+          if (o !== f && os && !f.multiple && !o.multiple && F.matchPattern(f.match, os.fileName)) add(arr, 'warn', '规则也能匹配到「' + (o.label || o.id) + '」的文件（' + os.fileName + '），两个文件同时放在 input 里时会让你选择');
         });
       }
       if (smp && f.sheet !== undefined && f.sheet !== '' && !M.sampleSheet(f.id, f.sheet)) add(arr, 'error', '样例文件里没有工作表「' + f.sheet + '」');
+      if (f.multiple && f.role === 'main') add(arr, 'error', '主表不能设为“多个文件”');
     });
+    const multiIds = new Set(cfg.files.filter(f => f.multiple).map(f => f.id));
 
     // 步骤
     if (!cfg.steps.length) add(res.global, 'error', '还没有处理步骤');
@@ -401,6 +437,9 @@
         if (!has) add(arr, 'error', '请填写「' + fd.label + '」');
       });
       if (s.enabled === false) return;
+      if (s.op !== 'append_rows') {
+        M.fileRefs(s).filter(x => multiIds.has(x)).forEach(x => add(arr, 'error', '「' + M.fileLabel(x) + '」是“多个文件”，只能用在“追加行（多文件合并）”里'));
+      }
       const tgt = M.stepTarget(s);
       if (s.file !== undefined && !ids.has(s.file)) add(arr, 'error', '文件「' + s.file + '」不在文件列表里');
       if (def.writes !== false && tgt.fileId !== mainId && s.file !== undefined) add(arr, 'error', '只有主表可以被修改（参照表只读）');
@@ -425,7 +464,32 @@
 
   function cfgSample(id) { return M.state.samples[id] || null; }
 
-  /** 执行器不计算公式：本次运行中新写入公式的列，在后面的条件、排序、去重、匹配、校验里都还没有值（当作空值）。提前提醒。 */
+  /**
+   * 是否是执行器能实时算出结果的简单公式（与 executor/engine/miniexpr.py 一致）：
+   * 同一行单元格、数字之间的 + - * / ^ %、括号，以及 ROUND / ABS / MAX / MIN / INT。
+   * 公式模板里的 [@列名] 视为同一行的单元格；[列名]（整列区域）、跨表引用、文字拼接、其他函数都不算。
+   */
+  M.isSimpleFormula = function (f) {
+    if (typeof f !== 'string') return false;
+    let s = f.trim();
+    if (s.startsWith('=')) s = s.slice(1);
+    if (/\[[^@\]]/.test(s)) return false;
+    s = s.replace(/\[@[^\]]+\]/g, 'A1').replace(/\{row\}/g, '1');
+    const re = /\s*(?:(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\$?[A-Za-z]{1,3}\$?\d+)(?![A-Za-z0-9_(!])|([A-Za-z][A-Za-z0-9.]*)\s*\(|([-+*/^(),%]))/y;
+    let pos = 0, n = 0;
+    while (pos < s.length) {
+      if (!s.slice(pos).trim()) break;
+      re.lastIndex = pos;
+      const m = re.exec(s);
+      if (!m || re.lastIndex === pos) return false;
+      if (m[3] && !['ROUND', 'ABS', 'MAX', 'MIN', 'INT'].includes(m[3].toUpperCase())) return false;
+      pos = re.lastIndex;
+      n++;
+    }
+    return n > 0;
+  };
+
+  /** 执行器只能实时计算简单公式：本次运行中新写入的其他公式，在后面的条件、排序、去重、匹配、校验里都还没有值（当作空值）。提前提醒。 */
   function freshFormulaPass(cfg, res, add) {
     const fresh = new Map();   // 列名 → 写入公式的步骤号
     const mainId = M.mainId(cfg);
@@ -448,19 +512,38 @@
       if (s.op === 'compare' && Array.isArray(s.compare_columns)) push(names(s.compare_columns.map(p => (p && typeof p === 'object') ? p.main : p)), '比对');
       if (s.from_col !== undefined) push(names(s.from_col), '取值');
       if (s.op === 'validate') (s.checks || []).forEach(ck => { push(names(ck.columns), '校验'); push(condCols(ck.where), '校验条件'); });
+      if (s.op === 'group_summary') {
+        push(names(s.group_by), '分组');
+        if (s.mode === 'value') push(names((s.metrics || []).map(m => m && m.column)), '汇总');
+      }
+      if (s.op === 'append_rows') {        // 条件是来源文件的列，不受影响；主表的公式列在新行里会写入新公式
+        if (s.extend_formulas !== false) {
+          const sh = M.sampleSheet(mainId, s.sheet);
+          const spec = cfg.files.find(f => f.id === mainId) || {};
+          F.formulaInfo(sh, s.header_row || spec.header_row || 1).filter(x => !M.isSimpleFormula(x.formula)).forEach(x => { if (!fresh.has(x.name)) fresh.set(x.name, { step: i + 1, appended: true }); });
+        }
+        return;
+      }
       const seen = new Set();
       reads.forEach(([n, what]) => {
         if (!fresh.has(n) || seen.has(n)) return;
         seen.add(n);
-        add(res.steps[i], 'warn', what + '用到的「' + n + '」是第 ' + fresh.get(n) + ' 步新写入的公式。执行器不计算公式，执行时它还没有结果，会被当作空值。'
-          + '建议改用参与计算的原始列来判断（例如不判断“差额<0”，而是比较“单价”和“标准单价”两列）。');
+        const src = fresh.get(n);
+        add(res.steps[i], 'warn', what + '用到的「' + n + '」' + (src.appended ? '在第 ' + src.step + ' 步追加的新行里是新写入的公式' : '是第 ' + src.step + ' 步新写入的公式')
+          + '。执行器不计算公式，执行时它还没有结果，会被当作空值。建议改用参与计算的原始列来判断（例如不判断“差额<0”，而是比较“单价”和“标准单价”两列）。');
       });
       // 记录本步新写入公式的列
-      const hasFormula = s.formula !== undefined || s.formula_from !== undefined;
-      if (s.op === 'insert_column' && hasFormula) fresh.set(F.normHeader(s.header), i + 1);
-      if ((s.op === 'fill' || s.op === 'write_if') && hasFormula) names(s.column).forEach(n => fresh.set(n, i + 1));
-      if (s.op === 'fill_down') names(s.columns).forEach(n => fresh.set(n, i + 1));
-      if (s.op === 'copy_matched' && s.mode === 'formula') M.copyPairs(s).forEach(p => names(p.to).forEach(n => fresh.set(n, i + 1)));
+      // 简单公式执行器能实时算出结果，不需要提醒；复制来的公式（formula_from）内容未知，按复杂公式处理
+      const hasFormula = (s.formula !== undefined && !M.isSimpleFormula(s.formula)) || s.formula_from !== undefined;
+      if (s.op === 'insert_column' && hasFormula) fresh.set(F.normHeader(s.header), { step: i + 1 });
+      if ((s.op === 'fill' || s.op === 'write_if') && hasFormula) names(s.column).forEach(n => fresh.set(n, { step: i + 1 }));
+      if (s.op === 'fill_down') {
+        const sh = M.sampleSheet(mainId, s.sheet);
+        const spec = cfg.files.find(f => f.id === mainId) || {};
+        const info = F.formulaInfo(sh, s.header_row || spec.header_row || 1);
+        names(s.columns).forEach(n => { const x = info.find(y => y.name === n); if (!x || !M.isSimpleFormula(x.formula)) fresh.set(n, { step: i + 1 }); });
+      }
+      if (s.op === 'copy_matched' && s.mode === 'formula') M.copyPairs(s).forEach(p => names(p.to).forEach(n => fresh.set(n, { step: i + 1 })));
       if (s.op === 'rename_header') {
         const from = names(s.column)[0];
         if (from && fresh.has(from)) { fresh.set(F.normHeader(s.to), fresh.get(from)); fresh.delete(from); }
@@ -495,6 +578,8 @@
           if (v === undefined) break;
           let refH;
           if (fd.source === 'ref') { checkCond(v, errs, sim.headersAt(i, s.ref, s.ref_sheet, s.ref_header_row), undefined, false); break; }
+          if (fd.source === 'from') { checkCond(v, errs, M.fromHeaders(i, s, sim), undefined, false); break; }
+          if (s.op === 'group_summary' && s.mode !== 'value') errs.push('“只汇总符合条件的行”只能配合“结果值”写入方式；用公式方式时，可先用“删除行”去掉不要的行');
           if (fd.allowRef && matchInfo) refH = matchInfo.headers;
           checkCond(v, errs, headers, fd.allowRef ? (refH === undefined ? null : refH) : undefined, !!fd.allowRef);
           break;
@@ -621,6 +706,16 @@
             arr.forEach(x => { if (!['values', 'formulas', 'styles', 'widths', 'merges'].includes(x)) errs.push('复制内容「' + x + '」不认识'); });
           }
           break;
+        case 'metrics':
+          if (v === undefined) break;
+          if (!Array.isArray(v) || !v.length) { errs.push('请至少添加一个汇总指标'); break; }
+          v.forEach((m, k) => {
+            const no = '第 ' + (k + 1) + ' 个指标：';
+            if (!m || !M.METRIC_FUNCS[m.func]) { errs.push(no + '请选择汇总方式'); return; }
+            if (m.func !== 'count') { if (!m.column) errs.push(no + '请选择要汇总的列'); else colErr(m.column, no); }
+            if (m.func === 'count_distinct' && s.mode !== 'value') errs.push(no + '“不重复个数”只能用“结果值”写入方式');
+          });
+          break;
         case 'notFound':
           if (v !== undefined && v !== null) { if (!v.column) errs.push('未匹配标记：请选择写到哪一列'); else colErr(v.column, '未匹配标记：'); }
           break;
@@ -726,9 +821,20 @@
         return '把「' + M.fileLabel(f.file || '?') + '」的 ' + (f.sheet || '第一张表') + ' 复制进主表' + (s.name ? '，命名为 ' + s.name : '');
       }
       case 'validate': return (s.checks || []).map(ck => checkLabel(ck)).join('；') || '（未添加检查）';
+      case 'append_rows': {
+        const f = s.from || {};
+        const spec = M.fileSpec(f.file);
+        return '把「' + M.fileLabel(f.file || '?') + '」' + (spec && spec.multiple ? '（所有符合规则的文件）' : '') + '的行追加到主表' + (s.source_column ? '，在「' + s.source_column + '」写来源' : '') + cond;
+      }
+      case 'group_summary': {
+        const ms = (s.metrics || []).map(m => m.title || ((m.column ? M.colText(m.column) : '') + (M.METRIC_FUNCS[m.func] || '?'))).join('、');
+        return '按 ' + (M.colText(s.group_by) || '?') + ' 分组汇总 ' + (ms || '?') + ' → 工作表「' + (s.sheet_name || '分组汇总') + '」' + (s.mode === 'value' ? '（结果值）' : '');
+      }
       default: return def.label;
     }
   };
+
+  M.METRIC_FUNCS = { sum: '合计', count: '记录数', avg: '平均', max: '最大', min: '最小', count_distinct: '不重复个数' };
 
   const CHECK_TYPES = {
     required_columns: '必须有这些列', not_empty: '不能为空', unique: '不能重复', row_count: '数据行数范围',

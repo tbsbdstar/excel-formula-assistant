@@ -43,7 +43,7 @@
     const buf = await file.arrayBuffer();
     let wb;
     try {
-      wb = XLSX.read(buf, { type: 'array', sheetRows: F.SAMPLE_ROWS, dense: true, cellDates: true, cellFormula: false, cellHTML: false, cellStyles: false });
+      wb = XLSX.read(buf, { type: 'array', sheetRows: F.SAMPLE_ROWS, dense: true, cellDates: true, cellFormula: true, cellHTML: false, cellStyles: false });
     } catch (err) {
       const e = new Error('无法读取「' + file.name + '」：文件可能已损坏、加了密码，或不是真正的 Excel 文件。');
       e.kind = 'user';
@@ -56,6 +56,8 @@
   function readSheet(name, ws) {
     const rows = [];
     const data = ws['!data'] || [];
+    const formulaRows = {};   // 列号 → 含公式的行号列表
+    const formulaText = {};   // 列号 → 该列（最后一个）公式
     let maxC = -1;
     for (let r = 0; r < data.length; r++) {
       const src = data[r];
@@ -63,6 +65,8 @@
       const row = [];
       for (let c = 0; c < src.length; c++) {
         const cell = src[c];
+        // 记第一个公式（数据行的典型写法）；末尾合计行的 SUM 不代表这一列
+        if (cell && cell.f) { (formulaRows[c] = formulaRows[c] || []).push(r); if (!(c in formulaText)) formulaText[c] = '=' + cell.f; }
         if (!cell || cell.t === 'z') { row.push(null); continue; }
         let v = cell.v;
         if (cell.t === 'e') v = cell.w || '#ERR';
@@ -82,10 +86,20 @@
         fullCols = Math.max(fullCols, rg.e.c + 1);
       } catch (e) { /* ignore */ }
     }
-    const sheet = { name, rows, fullRows, fullCols, sampleCols: maxC + 1 };
+    const sheet = { name, rows, fullRows, fullCols, sampleCols: maxC + 1, formulaRows, formulaText };
     sheet.headerRow = detectHeader(sheet);
     return sheet;
   }
+
+  /** 数据行里是公式的列：[{ name, formula }] */
+  F.formulaInfo = function (sheet, headerRow) {
+    if (!sheet || !sheet.formulaRows) return [];
+    const hr = (headerRow || 1) - 1;
+    const head = F.headerList(sheet, headerRow) || [];
+    return Object.keys(sheet.formulaRows).filter(c => sheet.formulaRows[c].some(r => r > hr) && head[c])
+      .map(c => ({ name: head[c], formula: (sheet.formulaText || {})[c] || '' }));
+  };
+  F.formulaColumns = (sheet, headerRow) => F.formulaInfo(sheet, headerRow).map(x => x.name);
 
   /** 自动识别表头行（从 1 开始）：前 15 行里第一行“多数是文字、且宽度与下方数据相当”的行 */
   function detectHeader(sheet) {
@@ -121,7 +135,8 @@
         if (!isBlank(v)) vals.push(v);
       }
       if (!name && !vals.length) continue;
-      out.push({ idx: c, letter: U.colLetter(c), name, type: typeOf(vals), samples: vals.slice(0, 3).map(show), sensitive: sensitiveOf(name, vals) });
+      const samples = Array.from(new Set(vals.map(show))).slice(0, 3);
+      out.push({ idx: c, letter: U.colLetter(c), name, type: typeOf(vals), samples, sensitive: sensitiveOf(name, vals) });
     }
     return out;
   };
@@ -192,6 +207,24 @@
       .replace(/^\*+|\*+$/g, '');
     if (!stem) return '*' + ext;
     return '*' + stem + '*' + ext;
+  };
+
+  /** 一组同类文件的共同规则：取文件名（去掉日期编号后）最长的公共片段，如 门店A周销售、门店B周销售 → *周销售*.xlsx */
+  F.commonPattern = function (names) {
+    const stems = names.map(n => F.suggestPattern(n).replace(/\.[^.]+$/, '').replace(/^\*|\*$/g, ''));
+    const ext = (names[0].match(/\.[^.]+$/) || ['.xlsx'])[0].toLowerCase();
+    const base = stems[0] || '';
+    let best = '';
+    for (let i = 0; i < base.length; i++) {
+      for (let j = base.length; j > i + best.length; j--) {
+        const sub = base.slice(i, j);
+        if (!sub.includes('*') && stems.every(s => s.includes(sub))) { best = sub; break; }
+      }
+    }
+    best = best.replace(/^[\s_\-—]+|[\s_\-—]+$/g, '');
+    // 中文文件名常常只有一个共同字（如 华东一店、华南店 → 店），一个汉字也可以；英文字母至少 2 个
+    const ok = best.length >= 2 || /^[一-鿿]$/.test(best);
+    return ok ? '*' + best + '*' + ext : '*' + ext;
   };
 
   /** 与执行器一致：文件名规则（* ? 通配，不区分大小写） */
