@@ -1,5 +1,6 @@
-# 打包产物：用 python build.py 重新生成
+# 打包产物：网页用 python build.py、执行器用 python executor/build_toolkit.py 重新生成
 dist/
+.cache/
 
 __pycache__/
 *.pyc

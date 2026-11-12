@@ -78,6 +78,7 @@
     }
     if (!loaded) {
       if (wb.kind !== 'xlsx' && !notes.length) notes.push('原文件为 ' + wb.kind.toUpperCase() + '，已转换为 .xlsx（原有字体颜色等样式可能丢失）');
+      if (wb.skipped && wb.skipped.length) notes.push('超出处理上限、未载入的工作表没有包含在新文件里');
       const fresh = new ExcelJS.Workbook();
       rebuild(fresh, wb);
       return finish(fresh, wb, mode, notes);

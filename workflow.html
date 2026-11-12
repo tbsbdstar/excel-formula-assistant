@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Excel 工作流配置器</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23107c41'/%3E%3Cpath d='M9 10h14M9 16h10M9 22h6' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/workflow.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo wf-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h10M5 17h6"/></svg>
+      </span>
+      <div>
+        <h1>Excel 工作流配置器</h1>
+        <p>把每周 / 每月重复的表格处理步骤配置一次，以后双击就能自动完成</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="privacy" title="样例文件只在你的浏览器里读取表头等结构，不会上传到任何服务器">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="4.5" y="10" width="15" height="11" rx="2"/></svg>
+        文件只在本机读取
+      </span>
+      <details class="menu" id="exampleMenu">
+        <summary class="btn btn-ghost btn-sm">从示例开始</summary>
+        <div class="menu-pop" id="exampleList"></div>
+      </details>
+      <button id="btnOpen" class="btn btn-ghost btn-sm" type="button">打开配置…</button>
+      <button id="btnNew" class="btn btn-ghost btn-sm" type="button">新建</button>
+      <a class="btn btn-text btn-sm" href="index.html" id="linkV1">公式助手 →</a>
+      <input type="file" id="openInput" accept=".json,application/json" hidden>
+    </div>
+  </header>
+
+  <main class="wf-layout">
+    <!-- ① 文件 -->
+    <section class="panel wf-panel area-files" aria-labelledby="hFiles">
+      <h2 class="panel-title" id="hFiles"><span class="step-no">1</span>文件<span class="count" id="fileCount"></span></h2>
+      <p class="panel-intro">载入一份<b>样例</b>：用来读取表头、选择列名、检查配置。执行时处理的是你每次放进 input 文件夹的新文件。</p>
+      <div id="fileDrop" class="drop-mini" tabindex="0" role="button" aria-label="选择或拖入样例 Excel 文件">
+        <input type="file" id="fileInput" accept=".xlsx,.xlsm" multiple hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>
+        <div><b>拖入样例文件</b>，或点击选择<br><small>.xlsx，可一次选多个；第一个默认作为主表</small></div>
+      </div>
+      <div id="fileList" class="file-list"></div>
+    </section>
+
+    <!-- ② 步骤 -->
+    <section class="panel wf-panel area-steps" aria-labelledby="hSteps">
+      <div class="panel-head">
+        <h2 class="panel-title" id="hSteps"><span class="step-no">2</span>处理步骤<span class="count" id="stepCount"></span></h2>
+        <button id="btnAddStep" class="btn btn-primary btn-sm" type="button">＋ 添加步骤</button>
+      </div>
+      <p class="panel-intro">按从上到下的顺序执行。可拖动 <span class="kbd">⋮⋮</span> 调整顺序，点击步骤展开修改参数。</p>
+      <ol id="stepList" class="step-list"></ol>
+      <div id="stepsEmpty" class="steps-empty" hidden>
+        <h3>还没有步骤</h3>
+        <p>点“添加步骤”，从删列、插列、按条件着色、两表匹配回填、比对、复制、校验等操作中选择；也可以点右上角“从示例开始”。</p>
+        <button class="btn btn-primary" type="button" id="btnAddFirst">＋ 添加第一个步骤</button>
+      </div>
+    </section>
+
+    <!-- ③ 导出 -->
+    <section class="panel wf-panel area-export" aria-labelledby="hExport">
+      <h2 class="panel-title" id="hExport"><span class="step-no">3</span>保存与导出</h2>
+      <label class="field"><span>工作流名称</span><input id="cfgName" placeholder="如：每周订单整理"></label>
+      <label class="field"><span>说明 <span class="muted">（可选）</span></span><textarea id="cfgDesc" rows="2" placeholder="这个工作流做什么，给以后的自己或同事看"></textarea></label>
+      <details class="adv">
+        <summary>更多设置</summary>
+        <label class="field"><span>结果文件名</span><input id="cfgOutput" class="mono" placeholder="{main}_处理结果_{time}.xlsx">
+          <small>{main} 主表文件名 · {name} 工作流名称 · {date} 日期 · {time} 日期时间</small></label>
+        <label class="field"><span>公式重算校验</span>
+          <select id="cfgRecalc">
+            <option value="auto">自动：本机有 Excel/WPS 就重算并检查错误值（推荐）</option>
+            <option value="off">关闭：只检查公式写法</option>
+            <option value="required">必须：没有 Excel/WPS 就报错</option>
+          </select></label>
+      </details>
+      <div id="checkBox" class="check-box" aria-live="polite"></div>
+      <div class="export-actions">
+        <button id="btnSave" class="btn btn-primary btn-block" type="button">保存配置文件（.json）</button>
+        <button id="btnPackage" class="btn btn-ghost btn-block" type="button">生成完整工具包（.zip）</button>
+        <div class="toolkit-line" id="toolkitLine"></div>
+        <button id="btnJson" class="btn btn-text btn-sm" type="button">查看配置内容</button>
+        <input type="file" id="toolkitInput" accept=".zip,application/zip" hidden>
+      </div>
+      <div class="howto">
+        <b>怎么用</b>
+        <ol>
+          <li>把保存的 .json 放进工具包的 <code>configs</code> 文件夹（或直接用“生成完整工具包”，配置已在里面）。</li>
+          <li>把要处理的表格放进 <code>input</code> 文件夹。</li>
+          <li>双击 <code>run.bat</code>，结果和校验报告在 <code>output</code> 文件夹。</li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <!-- 选择操作 -->
+  <dialog id="opDialog" class="dialog op-dialog">
+    <form method="dialog">
+      <h2>添加步骤</h2>
+      <p class="dlg-intro">选择一个操作，添加后在步骤里填写参数。</p>
+      <div id="opGroups" class="op-groups"></div>
+      <div class="dlg-actions"><span class="spacer"></span><button class="btn btn-ghost" value="cancel">取消</button></div>
+    </form>
+  </dialog>
+
+  <!-- 查看 JSON -->
+  <dialog id="jsonDialog" class="dialog json-dialog">
+    <form method="dialog">
+      <h2>配置内容 <span class="muted">（excel-workflow/1）</span></h2>
+      <p class="dlg-intro">这就是保存出来的配置文件。执行器只按它执行内置操作，不包含任何程序代码。</p>
+      <pre id="jsonView" class="json-view"></pre>
+      <div class="dlg-actions">
+        <button class="btn btn-ghost" type="button" id="btnCopyJson">复制</button>
+        <span class="spacer"></span>
+        <button class="btn btn-primary" value="ok">关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/wf-catalog.js"></script>
+  <script src="js/wf-examples.js"></script>
+  <script src="js/wf-files.js"></script>
+  <script src="js/wf-model.js"></script>
+  <script src="js/wf-fields.js"></script>
+  <script src="js/wf-zip.js"></script>
+  <script src="js/wf-app.js"></script>
+</body>
+</html>

@@ -60,6 +60,11 @@
     dz.querySelector('.drop-inner').innerHTML = '<div class="state" style="justify-content:center"><div class="spinner"></div><div><h3>' + esc(msg) + '</h3><p>数据量大时需要几秒钟</p></div></div>';
   }
 
+  (function () {
+    const F = EFA.LIMITS.file;
+    const n = document.getElementById('limitNote');
+    if (n) n.textContent = '单个文件 ≤ ' + F.maxFileMB + 'MB；每个工作表 ≤ ' + (F.maxRows / 10000) + ' 万行、' + F.maxCols + ' 列；一个文件最多处理 ' + F.maxSheets + ' 个工作表';
+  })();
   const DROP_HTML = document.getElementById('dropzone').querySelector('.drop-inner').innerHTML;
   function resetDataView() {
     $('dropzone').querySelector('.drop-inner').innerHTML = DROP_HTML;
@@ -95,7 +100,9 @@
     const wb = state.wb;
     $('fileName').textContent = wb.fileName;
     const rows = wb.sheets.reduce((n, s) => n + Math.max(0, s.dataEnd - s.dataStart + 1), 0);
-    $('fileMeta').textContent = wb.sheets.length + ' 个工作表 · 共 ' + rows.toLocaleString() + ' 行数据' + (wb.kind !== 'xlsx' ? ' · 下载时将转换为 .xlsx' : '');
+    $('fileMeta').textContent = wb.sheets.length + ' 个工作表 · 共 ' + rows.toLocaleString() + ' 行数据' +
+      (wb.skipped && wb.skipped.length ? ' · ' + wb.skipped.length + ' 个工作表超出上限未载入' : '') +
+      (wb.kind !== 'xlsx' ? ' · 下载时将转换为 .xlsx' : '');
     document.querySelector('.file-icon').textContent = wb.kind;
   }
 
@@ -108,6 +115,9 @@
       const added = s.columns.filter(c => c.added).length;
       html += '<button class="sheet-tab' + (active ? ' active' : '') + '" role="tab" aria-selected="' + active + '" data-sheet="' + i + '">' + esc(s.name) +
         (added ? '<span class="tag">+' + added + '列</span>' : '') + '</button>';
+    });
+    (wb.skipped || []).forEach(s => {
+      html += '<button class="sheet-tab skipped" type="button" disabled title="未载入：' + esc(s.reason) + '">' + esc(s.name) + '<span class="tag tag-off">未载入</span></button>';
     });
     wb.outputs.forEach(o => {
       const active = state.view.type === 'output' && state.view.name === o.name;
@@ -312,7 +322,7 @@
   function showError(e) {
     const isKind = e.kind === 'unsupported' || e.kind === 'need_clarification';
     $('resultArea').innerHTML = '<div class="card"><div class="state"><div style="font-size:22px">' + (isKind ? '💬' : '⚠️') + '</div><div>' +
-      '<h3>' + (e.kind === 'unsupported' ? '这个需求做不了' : e.kind === 'need_clarification' ? '需要说得更具体一点' : '生成失败') + '</h3>' +
+      '<h3>' + (e.kind === 'unsupported' ? '这个需求做不了' : e.kind === 'need_clarification' ? '需要说得更具体一点' : e.kind === 'limit' ? '超出使用上限' : '生成失败') + '</h3>' +
       '<p>' + esc(e.message || String(e)) + '</p>' +
       (/API Key|设置/.test(e.message || '') ? '<button class="btn btn-ghost btn-sm" type="button" data-act="settings">打开 AI 设置</button>' : '') +
       '</div></div></div>';
@@ -323,7 +333,12 @@
     if (!op) return;
     renderView();
     const p = op.plan;
-    const src = p.source === 'ai' ? '<span class="badge badge-ai">AI 生成 · ' + esc(L.modelName(p.model || '')) + '</span>' : '<span class="badge badge-tpl">内置模板</span>';
+    let cost = '';
+    if (p.source === 'ai' && p.usage) {
+      const used = p.usage.inTok + p.usage.outTok;
+      cost = ' · ' + (used ? '消耗 ' + used.toLocaleString() : '约 ' + p.usage.estimate.toLocaleString()) + ' tokens';
+    }
+    const src = p.source === 'ai' ? '<span class="badge badge-ai" title="' + (p.usage && p.usage.trimmed ? '表格较大，发给 AI 的表结构已自动精简' : '') + '">AI 生成 · ' + esc(L.modelName(p.model || '')) + cost + '</span>' : '<span class="badge badge-tpl">内置模板 · 不消耗额度</span>';
     let body = '';
     if (p.interpretation) body += '<p class="interp"><b>我的理解：</b>' + esc(p.interpretation) + '</p>';
 
@@ -515,6 +530,9 @@
     $('setBase').value = s.baseURL;
     $('setBase').placeholder = p.base;
     $('setSamples').checked = s.sendSamples;
+    $('setDaily').value = s.dailyCalls;
+    const u = L.getUsage();
+    $('usageLine').textContent = '今天已调用 ' + u.calls + ' 次，消耗约 ' + (u.inTok + u.outTok).toLocaleString() + ' tokens（统计只在本浏览器）。';
   }
 
   function openSettings() {
@@ -529,7 +547,8 @@
     let model = $('setModel').value;
     if (model === CUSTOM) model = $('setCustomModel').value.trim() || L.PROVIDERS[pid].models[0].id;
     if (key && !/^sk-/.test(key)) toast('API Key 一般以 sk- 开头，请检查是否复制完整');
-    L.saveSettings({ provider: pid, apiKey: key, model, baseURL: $('setBase').value, workspace: $('setWorkspace').value, sendSamples: $('setSamples').checked });
+    const daily = Math.max(0, Math.floor(Number($('setDaily').value)));
+    L.saveSettings({ provider: pid, apiKey: key, model, baseURL: $('setBase').value, workspace: $('setWorkspace').value, sendSamples: $('setSamples').checked, dailyCalls: Number.isFinite(daily) ? daily : undefined });
     renderAiState();
     toast(key ? 'AI 已启用：' + L.PROVIDERS[pid].name + ' · ' + model + '（Key 仅保存在本标签页）' : '已保存设置');
   }

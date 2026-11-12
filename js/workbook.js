@@ -35,19 +35,28 @@
     if (!['xlsx', 'xlsm', 'xls', 'csv', 'txt', 'tsv'].includes(ext)) {
       throw new Error('不支持的文件类型 .' + ext + '，请上传 .xlsx / .xls / .csv 文件');
     }
+    const LIM = EFA.LIMITS.file;
+    if (file.size > LIM.maxFileMB * 1024 * 1024) {
+      throw new Error('文件有 ' + (file.size / 1024 / 1024).toFixed(1) + 'MB，超过 ' + LIM.maxFileMB + 'MB 的处理上限。请删掉不需要的工作表或数据后再上传');
+    }
     const buf = await file.arrayBuffer();
     return fromBuffer(buf, name, ext);
   }
 
+  // 多读一些行，用来判断“数据是否真的超过上限”还是只是末尾有空的带格式行
+  const ROW_MARGIN = 1000;
+
   function fromBuffer(buf, name, ext) {
+    const LIM = EFA.LIMITS.file;
+    const sheetRows = LIM.maxRows + 20 + ROW_MARGIN;
     let xwb, kind;
     if (ext === 'csv' || ext === 'txt' || ext === 'tsv') {
       const text = decodeText(buf);
-      xwb = XLSX.read(text, { type: 'string', raw: true, FS: ext === 'tsv' ? '\t' : undefined });
+      xwb = XLSX.read(text, { type: 'string', raw: true, dense: true, sheetRows, FS: ext === 'tsv' ? '\t' : undefined });
       kind = 'csv';
     } else {
       try {
-        xwb = XLSX.read(buf, { type: 'array', cellDates: false, cellNF: true, cellFormula: true, cellText: true });
+        xwb = XLSX.read(buf, { type: 'array', dense: true, sheetRows, cellDates: false, cellNF: true, cellFormula: true, cellText: true });
       } catch (e) {
         throw new Error('文件无法解析，可能已损坏或被加密：' + (e.message || e));
       }
@@ -69,12 +78,25 @@
     };
     if (wb.date1904) wb.warnings.push('该文件使用 1904 日期系统，日期类计算结果可能有偏差');
 
-    xwb.SheetNames.forEach(sn => {
+    wb.skipped = [];   // 超出上限未载入的工作表 [{name, reason}]
+    let totalCells = 0;
+    for (const sn of xwb.SheetNames) {
       const ws = xwb.Sheets[sn];
-      if (!ws || ws['!type'] === 'chart') return;
-      wb.sheets.push(buildSheet(ws, sn, kind));
-    });
-    if (!wb.sheets.length) throw new Error('文件里没有可用的数据表');
+      if (!ws || ws['!type'] === 'chart') continue;
+      if (wb.sheets.length >= LIM.maxSheets) { wb.skipped.push({ name: sn, reason: '一个文件最多处理 ' + LIM.maxSheets + ' 个工作表' }); continue; }
+      const sheet = buildSheet(ws, sn, kind, sheetRows);
+      const reason = overLimit(sheet, ws, sheetRows);
+      if (reason) { wb.skipped.push({ name: sn, reason }); continue; }
+      const cells = (sheet.lastRow + 1) * (sheet.lastCol + 1);
+      if (totalCells + cells > LIM.maxTotalCells) { wb.skipped.push({ name: sn, reason: '文件数据总量过大，超过 ' + (LIM.maxTotalCells / 10000) + ' 万个单元格' }); continue; }
+      totalCells += cells;
+      wb.sheets.push(sheet);
+    }
+    if (!wb.sheets.length) {
+      if (wb.skipped.length) throw new Error('所有工作表都超出处理上限：' + wb.skipped.map(s => '「' + s.name + '」' + s.reason).join('；'));
+      throw new Error('文件里没有可用的数据表');
+    }
+    if (wb.skipped.length) wb.warnings.push(wb.skipped.length + ' 个工作表超出处理上限，未载入：' + wb.skipped.map(s => s.name).join('、'));
     // 默认选中第一个有数据的表
     const idx = wb.sheets.findIndex(s => s.dataEnd >= s.dataStart);
     wb.activeIndex = idx >= 0 ? idx : 0;
@@ -94,37 +116,57 @@
     }
   }
 
-  function buildSheet(ws, name, kind) {
+  function buildSheet(ws, name, kind, sheetRows) {
     const sheet = {
       name, values: [], display: [], fmts: [], formulas: {}, merges: ws['!merges'] || [],
       lastRow: -1, lastCol: -1, origLastCol: -1, headerRow: 0, dataStart: 1, dataEnd: 0, totalRow: null,
-      columns: [], warnings: [], cols: ws['!cols'] || null,
+      columns: [], warnings: [], cols: ws['!cols'] || null, parsedRows: 0,
     };
-    const ref = ws['!ref'];
-    if (!ref) return finalizeSheet(sheet, kind);
-    const range = XLSX.utils.decode_range(ref);
-    for (let r = 0; r <= range.e.r; r++) {
-      const row = [];
-      let disp = r < MAX_DISPLAY_ROWS + 20 ? [] : null;
+    // 稠密模式：只遍历真实存在的单元格，避免“整列设了格式”导致遍历上万列
+    const data = ws['!data'] || [];
+    sheet.parsedRows = data.length;
+    const maxCols = EFA.LIMITS.file.maxCols;
+    for (let r = 0; r < data.length; r++) {
+      const src = data[r] || [];
+      const width = Math.min(src.length, maxCols + 1);
+      const row = new Array(width).fill(null);
+      const disp = r < MAX_DISPLAY_ROWS + 20 ? new Array(width).fill('') : null;
       const fmtRow = [];
-      for (let c = 0; c <= range.e.c; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      for (let c = 0; c < src.length; c++) {
+        const cell = src[c];
+        if (!cell) continue;
         const v = cellValue(cell);
-        row.push(v);
-        if (cell && cell.z && cell.t === 'n') fmtRow[c] = cell.z;
-        if (disp) disp.push(cell ? (cell.w != null ? cell.w : (v == null ? '' : String(v))) : '');
-        if (cell && cell.f && kind !== 'xlsx') sheet.formulas[r + ',' + c] = cell.f;
-        if (v !== null && v !== '') {
-          if (r > sheet.lastRow) sheet.lastRow = r;
-          if (c > sheet.lastCol) sheet.lastCol = c;
-        }
+        if (v === null || v === '') { if (c < width && cell.z && cell.t === 'n') fmtRow[c] = cell.z; continue; }
+        if (r > sheet.lastRow) sheet.lastRow = r;
+        if (c > sheet.lastCol) sheet.lastCol = c;
+        if (c >= width) continue; // 超出列上限：只记录宽度，不保存数据
+        row[c] = v;
+        if (cell.z && cell.t === 'n') fmtRow[c] = cell.z;
+        if (disp) disp[c] = cell.w != null ? cell.w : String(v);
+        if (cell.f && kind !== 'xlsx') sheet.formulas[r + ',' + c] = cell.f;
       }
       sheet.values.push(row);
       sheet.fmts.push(fmtRow);
       if (disp) sheet.display.push(disp);
     }
+    if (sheet.lastCol >= maxCols) return sheet; // 超列上限，交给 overLimit 拒绝
     if (kind === 'csv') coerceCsv(sheet);
     return finalizeSheet(sheet, kind);
+  }
+
+  /** 工作表是否超出上限；不超出返回 null */
+  function overLimit(sheet, ws, sheetRows) {
+    const LIM = EFA.LIMITS.file;
+    if (sheet.lastCol >= LIM.maxCols) return '有 ' + (sheet.lastCol + 1) + ' 列，超过每表 ' + LIM.maxCols + ' 列的上限';
+    let fullRows = sheet.parsedRows;
+    if (ws['!fullref']) fullRows = XLSX.utils.decode_range(ws['!fullref']).e.r + 1;
+    const truncated = fullRows > sheet.parsedRows && sheet.parsedRows >= sheetRows;
+    // 读取被截断、且数据一直延续到截断处：说明后面还有数据
+    if (truncated && sheet.lastRow >= sheet.parsedRows - ROW_MARGIN) {
+      return '有约 ' + Math.round(fullRows / 10000) + ' 万行，超过每表 ' + (LIM.maxRows / 10000) + ' 万行的上限';
+    }
+    if (sheet.lastRow - sheet.headerRow > LIM.maxRows) return '数据超过每表 ' + (LIM.maxRows / 10000) + ' 万行的上限';
+    return null;
   }
 
   /* CSV 全部按文本读入后，按列判断是否为数字/日期，避免“001”这类编码丢失前导零 */
@@ -717,7 +759,7 @@
 
   EFA.Workbook = {
     readFile, fromBuffer, setHeaderRow, detectHeader, displayValue, formatValue, isErrorValue,
-    applyPending, commitPending, discardPending, removeOp, changeHeaderRow, resolver, isDateFmt,
+    applyPending, commitPending, discardPending, removeOp, changeHeaderRow, resolver, isDateFmt, overLimit,
     ENGINE_CONFIG,
   };
 })(window.EFA = window.EFA || {});

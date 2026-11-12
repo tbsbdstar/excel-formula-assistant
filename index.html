@@ -21,6 +21,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="4.5" y="10" width="15" height="11" rx="2"/></svg>
         文件只在本机处理
       </span>
+      <a class="btn btn-text" href="workflow.html" title="多文件、多步骤的重复处理：配置一次，以后在本机一键执行">工作流配置器 →</a>
       <button id="btnSettings" class="btn btn-ghost" type="button">
         <span class="ai-dot" id="aiDot"></span><span id="aiLabel">AI 设置</span>
       </button>
@@ -38,6 +39,7 @@
           </div>
           <h2>把 Excel 文件拖到这里</h2>
           <p>支持 .xlsx / .xls / .csv，兼容 Excel 2016、WPS</p>
+          <p class="drop-note" id="limitNote"></p>
           <div class="drop-actions">
             <button class="btn btn-primary" id="btnPick" type="button">选择文件</button>
             <button class="btn btn-ghost" id="btnSample" type="button">用示例数据试试</button>
@@ -129,6 +131,11 @@
           <input type="url" id="setBase" spellcheck="false">
         </label>
       </details>
+      <label class="field">
+        <span>每天最多调用 AI 次数（0 表示不限）</span>
+        <input type="number" id="setDaily" min="0" max="10000" step="1" inputmode="numeric">
+        <small id="usageLine"></small>
+      </label>
       <label class="check">
         <input type="checkbox" id="setSamples">
         <span>把每列的少量示例值一起发给 AI（理解更准确；关闭后只发送列名和类型）</span>
@@ -148,6 +155,7 @@
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="vendor/exceljs.min.js"></script>
   <script src="vendor/hyperformula.full.min.js"></script>
+  <script src="js/limits.js"></script>
   <script src="js/util.js"></script>
   <script src="js/functions.js"></script>
   <script src="js/formula.js"></script>

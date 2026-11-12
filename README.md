@@ -2,6 +2,12 @@
 
 按《Excel 智能函数助手.md》PRD V1.0 实现的纯前端工具。用户拖入表格、用一句中文描述需求，就能得到 Excel 2016 / WPS 兼容的公式和计算结果，并可下载 .xlsx 文件（可选择保存“结果值”或“公式”）。
 
+> **V2.0 工作流（多文件、多步骤的重复处理）**由两部分组成：
+> - **工作流配置器** [workflow.html](workflow.html)：载入样例文件、编排步骤（21 种操作）、逐步推算表头并校验参数，保存为 JSON 配置，或直接生成放好配置的完整工具包 zip。纯前端，只依赖 SheetJS。
+> - **本地执行器** [executor/](executor/)：按 JSON 配置在本机批量处理 Excel（删插列、条件着色、多键匹配回填、比对、区块复制、校验报告），绿色便携包无需安装 Python，包里自带单文件版配置器。
+>
+> 用户手册见 [executor/docs/使用手册.txt](executor/docs/使用手册.txt)，配置格式见 [executor/docs/配置格式说明.md](executor/docs/配置格式说明.md)。打包：`python executor/build_toolkit.py`（生成 `executor/dist/Excel工作流工具/` 和 zip）；测试：`python -m unittest discover -s executor/tests`（含配置器操作目录与执行器参数的一致性检查）。源码目录里的 `executor/run.bat` 没有自带 Python，双击时会自动转去启动 dist 里打包好的工具。
+
 ## 怎么用
 
 - **直接打开**：双击 `index.html`，用 Chrome / Edge 打开即可，不需要安装、不需要服务器。`vendor/`、`js/`、`css/` 三个文件夹必须和它放在一起。
@@ -14,7 +20,7 @@
 python build.py
 ```
 
-会生成 `dist/Excel智能函数助手.html`（约 3MB），所有代码和组件库都在这一个文件里，可以直接用微信、邮件发送，对方用 Chrome / Edge 双击即可使用（AI 功能同样可用）。每次修改代码后重新运行一次即可。
+会生成 `dist/Excel智能函数助手.html`（约 3MB）和 `dist/Excel工作流配置器.html`（约 1MB），所有代码和组件库都在一个文件里，可以直接用微信、邮件发送，对方用 Chrome / Edge 双击即可使用（AI 功能同样可用）。每次修改代码后重新运行一次即可。打包时还会把 `executor/templates/*.json` 同步到 `js/wf-examples.js`（配置器的“从示例开始”）。
 
 提醒对方：电脑版微信里点开 html 可能会用微信内置浏览器，最好先“另存为”再用浏览器打开；360 等浏览器需切到“极速模式”。
 
@@ -55,6 +61,26 @@ python build.py
 - AI 返回的公式同样要通过白名单校验和引擎试算；不通过会把错误反馈给 AI 自动修正一次。返回内容不是合法 JSON、返回空内容、模型不支持 JSON 模式时，也都会自动重试。
 - Key 由使用者自己提供（BYOK），按用量计费；每次生成通常只有几千 token。
 
+## 处理上限与 AI 用量控制
+
+所有数字集中在 `js/limits.js`，改完运行 `python build.py` 重新打包即可。
+
+| 项 | 默认值 | 超出时 |
+|---|---|---|
+| 单个文件大小 | 30MB | 拒绝载入并提示 |
+| 每个工作表行数 | 10 万行 | 该表不载入（不截断，避免算错），其他表照常 |
+| 每个工作表列数 | 200 列 | 该表不载入 |
+| 一个文件的工作表数 | 20 个 | 多出的不载入 |
+| 所有表单元格总数 | 300 万 | 多出的表不载入 |
+| 单次发给 AI 的内容 | 约 6000 tokens | 自动精简（去掉样例→只保留需求提到的表→…），仍超出则提示删列 |
+| 一次“生成”最多调用 AI | 3 次（含自动修正） | 停止并报错 |
+| 单次输出上限 | 2048 tokens（思考型模型 8192） | 提示输出被截断 |
+| 每天调用次数 | 50 次（使用者可在“AI 设置”里改，0 为不限） | 当天不再调用 AI，模板不受影响 |
+
+费用只和“发给 AI 的表结构描述 + 需求”有关，与文件行数无关：AI 只看到列名、类型和少量示例值，不会收到整份数据。按示例数据估算，一次生成约发送 2000～3000 tokens。
+
+> 这些限制在浏览器里执行，用来防止误用、控制用量；**不是安全措施**。不要把自己的 API Key 写死在 html 里发给别人，任何拿到文件的人都能从源码里取出 Key。
+
 ## 目录
 
 ```
@@ -62,6 +88,7 @@ index.html        页面
 tests.html        模板回归测试
 build.py          打包成单个 html（输出到 dist/）
 css/app.css       样式（自动适配深色模式、手机宽度）
+js/limits.js      处理上限与 AI 用量上限（集中配置）
 js/util.js        通用工具
 js/functions.js   Excel 2016 函数白名单与中文说明
 js/formula.js     公式扫描、列引用语法展开、校验、高亮
@@ -72,6 +99,16 @@ js/llm.js         DeepSeek / 通义千问调用、提示词、返回校验
 js/exporter.js    导出 .xlsx
 js/samples.js     示例数据
 js/app.js         页面交互
+workflow.html     工作流配置器（V2.0）
+css/workflow.css  配置器样式
+js/wf-catalog.js  配置器的操作目录（严格 JSON；与执行器参数一致，由 executor/tests/test_catalog.py 核对）
+js/wf-examples.js 示例工作流（build.py 自动生成）
+js/wf-files.js    读取样例文件结构（表头、列类型、文件名规则）
+js/wf-model.js    配置模型：逐步推算表头、参数校验、步骤摘要、导入导出
+js/wf-fields.js   参数编辑控件（列选择、条件构建器、颜色等）
+js/wf-zip.js      把配置放进工具包 zip
+js/wf-app.js      配置器页面交互
+executor/         本地执行器（Python）与绿色工具包打包脚本
 vendor/           SheetJS 0.20.3、ExcelJS 4.4.0、HyperFormula 3.5.0（本地副本，离线可用）
 ```
 

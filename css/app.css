@@ -181,6 +181,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sheet-tab:hover { color: var(--text); background: var(--surface-2); }
 .sheet-tab.active { background: var(--surface); border-color: var(--border); color: var(--text); font-weight: 600; }
 .sheet-tab .tag { font-size: 11px; color: var(--accent-text); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; margin-left: 6px; font-weight: 500; }
+.sheet-tab.skipped { color: var(--text-3); cursor: not-allowed; text-decoration: line-through; }
+.sheet-tab .tag-off { color: var(--warn); background: var(--warn-soft); text-decoration: none; display: inline-block; }
 .sheet-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 16px; color: var(--text-2); font-size: 13px; }
 .sheet-meta select { padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); }
 .sheet-meta .warn { color: var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 2px 8px; }

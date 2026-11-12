@@ -1,0 +1,2 @@
+# Windows 批处理必须是 CRLF，否则 cmd 找不到标签（goto/call :label）
+*.bat text eol=crlf

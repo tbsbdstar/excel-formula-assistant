@@ -1,0 +1,24 @@
+{
+  "schema": "excel-workflow/1",
+  "name": "示例：按多列匹配回填并标色",
+  "description": "用“订单号+商品编码”两列组合匹配上期表；未分配数≥10 的行回填上期的下单/入库时间并标色，未分配数=数量的写“逾期”。",
+  "files": [
+    {"id": "main", "role": "main", "label": "本期订单", "match": "*本期*.xlsx"},
+    {"id": "ref", "role": "ref", "label": "上期订单", "match": "*上期*.xlsx"}
+  ],
+  "options": {"recalc": "auto"},
+  "steps": [
+    {"op": "insert_column", "title": "新增备注列", "header": "备注", "end": true},
+    {"op": "format", "title": "未分配数≥10 标色", "columns": ["未分配数"],
+     "where": {"col": "未分配数", "op": ">=", "value": 10}, "fill": "FCE4D6"},
+    {"op": "match", "title": "订单号+商品编码匹配上期", "id": "m", "ref": "ref", "main_keys": ["订单号", "商品编码"]},
+    {"op": "copy_matched", "title": "回填下单/入库时间", "match": "m", "columns": ["下单时间", "入库时间"], "create_missing": true,
+     "where": {"col": "未分配数", "op": ">=", "value": 10}, "fill": "FCE4D6"},
+    {"op": "fill", "title": "写逾期", "column": "备注", "value": "逾期",
+     "where": {"all": [{"col": "未分配数", "op": ">=", "value": 10}, {"col": "未分配数", "op": "=", "col2": "数量"}]}},
+    {"op": "validate", "title": "检查", "checks": [
+      {"type": "unique", "columns": ["订单号", "商品编码"]},
+      {"type": "not_empty", "columns": ["订单号"], "on_fail": "stop"}
+    ]}
+  ]
+}

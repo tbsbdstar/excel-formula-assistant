@@ -30,9 +30,9 @@
       base: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       workspaceBase: ws => 'https://' + ws + '.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
       models: [
-        { id: 'qwen-plus', name: 'qwen-plus（默认，均衡）' },
-        { id: 'qwen-max', name: 'qwen-max（更强）' },
-        { id: 'qwen3.8-max', name: 'qwen3.8-max（最新旗舰，较慢）' },
+        { id: 'qwen-plus', name: 'qwen-plus（默认，均衡）', thinking: false },
+        { id: 'qwen-max', name: 'qwen-max（更强）', thinking: false },
+        { id: 'qwen3.8-max', name: 'qwen3.8-max（最新旗舰，较慢）', thinking: true },
       ],
       extra: () => ({}),
     },
@@ -55,6 +55,7 @@
     const pid = PROVIDERS[providerId] ? providerId : (PROVIDERS[prefs.provider] ? prefs.provider : 'deepseek');
     const per = (prefs.per && prefs.per[pid]) || {};
     const p = PROVIDERS[pid];
+    const daily = Number(prefs.dailyCalls);
     return {
       provider: pid,
       apiKey: safeGet(sessionStorage, KEY_PREFIX + pid) || '',
@@ -62,6 +63,7 @@
       baseURL: per.baseURL || '',
       workspace: per.workspace || '',
       sendSamples: prefs.sendSamples !== false,
+      dailyCalls: Number.isFinite(daily) && daily >= 0 && prefs.dailyCalls !== undefined && prefs.dailyCalls !== '' ? Math.floor(daily) : EFA.LIMITS.ai.defaultDailyCalls,
     };
   }
 
@@ -69,6 +71,7 @@
     const prefs = loadPrefs();
     prefs.provider = s.provider;
     prefs.sendSamples = !!s.sendSamples;
+    if (s.dailyCalls !== undefined) prefs.dailyCalls = s.dailyCalls;
     prefs.per = prefs.per || {};
     prefs.per[s.provider] = { model: (s.model || '').trim(), baseURL: (s.baseURL || '').trim(), workspace: (s.workspace || '').trim() };
     safeSet(localStorage, PREF_STORE, JSON.stringify(prefs));
@@ -76,6 +79,42 @@
   }
 
   function clearKey(providerId) { safeSet(sessionStorage, KEY_PREFIX + providerId, ''); }
+
+  /* ---------- 用量统计与每日上限（存在本浏览器） ---------- */
+  const USAGE_STORE = 'efa.aiUsage';
+  function today() {
+    const d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+  }
+  function getUsage() {
+    let u = null;
+    try { u = JSON.parse(safeGet(localStorage, USAGE_STORE) || 'null'); } catch (e) { u = null; }
+    if (!u || u.date !== today()) u = { date: today(), calls: 0, inTok: 0, outTok: 0 };
+    u.limit = getSettings().dailyCalls;
+    return u;
+  }
+  function recordUsage(usage) {
+    const u = getUsage();
+    u.calls += 1;
+    if (usage) { u.inTok += usage.prompt_tokens || 0; u.outTok += usage.completion_tokens || 0; }
+    delete u.limit;
+    safeSet(localStorage, USAGE_STORE, JSON.stringify(u));
+  }
+  function checkDaily() {
+    const u = getUsage();
+    if (u.limit > 0 && u.calls >= u.limit) {
+      const e = new Error('今天的 AI 调用次数已达上限（' + u.limit + ' 次）。可以在“AI 设置”里调高上限，或明天再试；内置模板不受影响。');
+      e.kind = 'limit';
+      throw e;
+    }
+  }
+
+  /** 粗略估算 token：中文约 0.7 个/字，其他约 1 个/3.5 字符，再留 10% 余量 */
+  function estimateTokens(text) {
+    const s = String(text || '');
+    const cjk = (s.match(/[　-鿿＀-￯]/g) || []).length;
+    return Math.ceil((cjk * 0.7 + (s.length - cjk) / 3.5) * 1.1);
+  }
   const isConfigured = () => !!getSettings().apiKey;
   const providerName = () => PROVIDERS[getSettings().provider].name;
   const modelName = id => id || '';
@@ -160,22 +199,74 @@
     return s;
   }
 
-  function buildContext(wb, sheet, withSamples) {
+  /** 需求里是否提到了这一列 / 这张表 */
+  const mentions = (request, name) => !!request && String(name).length >= 2 && request.indexOf(name) >= 0;
+
+  /** 选出要描述的列：需求里提到的列优先，其余按顺序补足到上限 */
+  function pickColumns(sheet, request) {
+    const max = EFA.LIMITS.ai.maxColsPerSheet;
+    if (sheet.columns.length <= max) return { cols: sheet.columns, hidden: 0 };
+    const hit = sheet.columns.filter(c => mentions(request, c.name));
+    const rest = sheet.columns.filter(c => !hit.includes(c));
+    const cols = hit.concat(rest.slice(0, Math.max(0, max - hit.length)));
+    cols.sort((a, b) => a.index - b.index);
+    return { cols, hidden: sheet.columns.length - cols.length };
+  }
+
+  /**
+   * 表结构描述。level 越高越精简：
+   * 0 全量；1 其他表不带样例；2 只保留需求里提到的其他表；3 当前表也不带样例
+   */
+  function buildContext(wb, sheet, withSamples, request, level) {
+    level = level || 0;
+    const A = EFA.LIMITS.ai;
     const lines = [];
     lines.push('当前工作表：「' + sheet.name + '」，表头在第 ' + (sheet.headerRow + 1) + ' 行，数据从第 ' + (sheet.dataStart + 1) + ' 行到第 ' + (sheet.dataEnd + 1) + ' 行（共 ' + (sheet.dataEnd - sheet.dataStart + 1) + ' 行）。列：');
-    sheet.columns.forEach(c => lines.push(describeColumn(sheet, c, withSamples)));
-    const others = wb.sheets.filter(s => s !== sheet && s.columns.length);
+    const own = pickColumns(sheet, request);
+    own.cols.forEach(c => lines.push(describeColumn(sheet, c, withSamples && level < 3)));
+    if (own.hidden) lines.push('  （另有 ' + own.hidden + ' 列未列出）');
+    let others = wb.sheets.filter(s => s !== sheet && s.columns.length);
+    const mentioned = s => mentions(request, s.name) || s.columns.some(c => mentions(request, c.name) && !sheet.columns.some(x => x.name === c.name));
+    others.sort((a, b) => (mentioned(b) ? 1 : 0) - (mentioned(a) ? 1 : 0));
+    if (level >= 2) others = others.filter(mentioned);
+    const omitted = Math.max(0, others.length - A.maxOtherSheets);
+    others = others.slice(0, A.maxOtherSheets);
     if (others.length) {
       lines.push('');
       lines.push('同一文件中的其他工作表：');
       others.forEach(s => {
+        const pc = pickColumns(s, request);
         lines.push('- 「' + s.name + '」（' + (s.dataEnd - s.dataStart + 1) + ' 行数据）列：');
-        s.columns.forEach(c => lines.push(describeColumn(s, c, withSamples)));
+        pc.cols.forEach(c => lines.push(describeColumn(s, c, withSamples && level < 1)));
+        if (pc.hidden) lines.push('  （另有 ' + pc.hidden + ' 列未列出）');
       });
     }
+    const totalOthers = wb.sheets.filter(s => s !== sheet && s.columns.length).length;
+    if (totalOthers > others.length) lines.push('（文件中另有 ' + (totalOthers - others.length) + ' 个工作表未列出' + (omitted ? '' : '，与需求无关') + '）');
     lines.push('');
     lines.push('今天的日期：' + U.formatSerialDate(U.todaySerial()));
     return lines.join('\n');
+  }
+
+  /** 在 token 预算内生成表结构描述；精简到最后仍超出则报错 */
+  function contextWithinBudget(wb, sheet, withSamples, request) {
+    const A = EFA.LIMITS.ai;
+    const budget = A.maxInputTokens - estimateTokens(systemPrompt()) - estimateTokens(request) - 80;
+    let ctx = '';
+    for (let level = 0; level <= 3; level++) {
+      ctx = buildContext(wb, sheet, withSamples, request, level);
+      if (estimateTokens(ctx) <= budget) return { ctx, level };
+    }
+    const e = new Error('这个表格的列太多，超出了单次发给 AI 的上限（约 ' + A.maxInputTokens + ' tokens）。可以删掉无关的列，或在需求里写明要用到的列名后重试。');
+    e.kind = 'limit';
+    throw e;
+  }
+
+  /** 估算一次生成要发送的 token 数（供页面显示） */
+  function estimateRequest(wb, sheet, request) {
+    const st = getSettings();
+    const { ctx } = contextWithinBudget(wb, sheet, st.sendSamples, request);
+    return estimateTokens(systemPrompt()) + estimateTokens(ctx) + estimateTokens(request);
   }
 
   /* ---------- 解析与校验 AI 返回 ---------- */
@@ -226,11 +317,16 @@
   async function chat(st, messages, opts, useJsonMode) {
     const p = PROVIDERS[st.provider];
     const preset = p.models.find(m => m.id === st.model) || null;
+    const A = EFA.LIMITS.ai;
+    // 自定义模型不知道是否带思考过程，按思考型给足输出上限，避免被截断
+    const thinking = preset ? preset.thinking : true;
     const body = Object.assign({
       model: st.model,
       messages,
       stream: false,
+      max_tokens: thinking ? A.maxOutputTokensThinking : A.maxOutputTokens,
     }, useJsonMode ? { response_format: { type: 'json_object' } } : {}, p.extra(preset));
+    checkDaily();
 
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(new DOMException('timeout', 'TimeoutError')), 180000);
@@ -254,6 +350,8 @@
     }
     let data = null;
     try { data = await resp.json(); } catch (e) { data = null; }
+    // 请求已到达服务商就计入次数（失败的请求一般不计费，但也计数，防止反复重试）
+    recordUsage(data && data.usage);
     if (!resp.ok) {
       const e = new Error(httpError(resp.status, data, st));
       e.status = resp.status;
@@ -262,7 +360,7 @@
     }
     const choice = data && data.choices && data.choices[0];
     if (!choice || !choice.message) throw new Error('AI 没有返回结果');
-    return { content: choice.message.content || '', finish: choice.finish_reason, model: data.model || st.model };
+    return { content: choice.message.content || '', finish: choice.finish_reason, model: data.model || st.model, usage: data.usage || null };
   }
 
   /**
@@ -274,18 +372,25 @@
     const st = getSettings();
     if (!st.apiKey) throw new Error('还没有设置 API Key');
     const p = PROVIDERS[st.provider];
+    checkDaily();
+    const { ctx, level } = contextWithinBudget(wb, sheet, st.sendSamples, request);
     const messages = [
       { role: 'system', content: systemPrompt() },
-      { role: 'user', content: '## 数据\n' + buildContext(wb, sheet, st.sendSamples) + '\n\n## 需求\n' + request + '\n\n请按要求输出 JSON。' },
+      { role: 'user', content: '## 数据\n' + ctx + '\n\n## 需求\n' + request + '\n\n请按要求输出 JSON。' },
     ];
+    const est = estimateTokens(messages[0].content) + estimateTokens(messages[1].content);
+    const spent = { calls: 0, inTok: 0, outTok: 0, estimate: est, trimmed: level > 0 };
     let jsonMode = true;
     let lastErr = null;
     let blankRetry = 0;
     for (let attempt = 0; attempt < 2; attempt++) {
-      opts.onStatus && opts.onStatus(attempt ? p.name + ' 正在修正公式…' : p.name + ' 正在生成公式…');
+      if (spent.calls >= EFA.LIMITS.ai.maxCallsPerRequest) break;
+      opts.onStatus && opts.onStatus((attempt ? p.name + ' 正在修正公式…' : p.name + ' 正在生成公式…') + '（本次发送约 ' + est.toLocaleString() + ' tokens）');
       let res;
       try {
+        spent.calls++;
         res = await chat(st, messages, opts, jsonMode);
+        if (res.usage) { spent.inTok += res.usage.prompt_tokens || 0; spent.outTok += res.usage.completion_tokens || 0; }
       } catch (e) {
         // 个别模型不支持 JSON 模式：去掉该参数重试一次
         if (jsonMode && (e.status === 400 || e.status === 422) && /response_format|json/i.test(e.raw || '')) {
@@ -322,6 +427,7 @@
         source: 'ai',
         model: p.name + ' · ' + res.model,
         request,
+        usage: spent,
       };
       if (!opts.validate) return plan;
       try {
@@ -337,5 +443,8 @@
     throw lastErr || new Error('AI 生成的公式无法使用');
   }
 
-  EFA.LLM = { PROVIDERS, PROVIDER_LIST, getSettings, saveSettings, clearKey, isConfigured, providerName, modelName, generate, buildContext, endpoint };
+  EFA.LLM = {
+    PROVIDERS, PROVIDER_LIST, getSettings, saveSettings, clearKey, isConfigured, providerName, modelName, generate,
+    buildContext, contextWithinBudget, estimateTokens, estimateRequest, getUsage, endpoint, systemPrompt,
+  };
 })(window.EFA = window.EFA || {});

@@ -1,0 +1,18 @@
+{
+  "schema": "excel-workflow/1",
+  "name": "示例：整理明细表",
+  "description": "删掉无用列、去掉测试数据和重复行、加一列含税金额公式、按金额从高到低排序。",
+  "files": [
+    {"id": "main", "role": "main", "label": "本期订单", "match": "*本期*.xlsx"}
+  ],
+  "options": {"recalc": "auto"},
+  "steps": [
+    {"op": "delete_columns", "title": "删除内部字段", "columns": ["内部备注"]},
+    {"op": "delete_rows", "title": "删除测试数据", "where": {"col": "客户", "op": "contains", "value": "测试"}},
+    {"op": "dedupe_rows", "title": "按订单号+商品编码去重", "keys": ["订单号", "商品编码"]},
+    {"op": "insert_column", "title": "含税金额", "header": "含税金额", "after": "金额", "formula": "=ROUND([@金额]*1.13,2)"},
+    {"op": "number_format", "title": "金额两位小数", "columns": ["金额", "含税金额"], "format": "#,##0.00"},
+    {"op": "sort_rows", "title": "按金额降序", "by": [{"column": "金额", "order": "desc"}]},
+    {"op": "rename_header", "title": "改表头", "column": "状态", "to": "订单状态"}
+  ]
+}
